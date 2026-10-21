@@ -1,0 +1,69 @@
+# Production stack. Usage:
+#   cp .env.prod.example .env.prod   # fill it in
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+name: worklingo
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: worklingo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: worklingo
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U worklingo"]
+      interval: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PORT: "8080"
+      DATABASE_URL: postgres://worklingo:${POSTGRES_PASSWORD}@postgres:5432/worklingo?sslmode=disable
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+      CORS_ORIGIN: https://${DOMAIN:?set DOMAIN}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LLM_BASE_URL: ${LLM_BASE_URL:?set LLM_BASE_URL}
+      LLM_API_KEY: ${LLM_API_KEY:?set LLM_API_KEY}
+      LLM_CHAT_MODEL: ${LLM_CHAT_MODEL:-claude-haiku-4-5-20251001}
+      LLM_EVAL_MODEL: ${LLM_EVAL_MODEL:-claude-sonnet-4-6}
+      LLM_TIMEOUT: ${LLM_TIMEOUT:-120s}
+      SESSION_DURATION: ${SESSION_DURATION:-60m}
+      RESPONSE_TIMEOUT: ${RESPONSE_TIMEOUT:-5m}
+      TASK_FIRST_DELAY: ${TASK_FIRST_DELAY:-2m}
+      TASK_MIN_INTERVAL: ${TASK_MIN_INTERVAL:-6m}
+      TASK_MAX_INTERVAL: ${TASK_MAX_INTERVAL:-12m}
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+
+  gateway:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on: [backend, frontend]
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+    # Host nginx (TLS via Cloudflare Origin cert) proxies to this; see deploy/nginx/worklingo.conf.
+    ports:
+      - "${GATEWAY_BIND:-127.0.0.1:8088}:80"
+
+  # Optional alternative to host nginx: `--profile tunnel` + CLOUDFLARE_TUNNEL_TOKEN.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles: [tunnel]
+    restart: unless-stopped
+    depends_on: [gateway]
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+
+volumes:
+  pgdata:

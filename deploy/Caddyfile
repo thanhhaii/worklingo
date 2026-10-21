@@ -1,0 +1,7 @@
+# Plain HTTP: TLS is terminated at Cloudflare.
+:80 {
+	encode zstd gzip
+	@backend path /api /api/* /ws
+	reverse_proxy @backend backend:8080
+	reverse_proxy frontend:3000
+}

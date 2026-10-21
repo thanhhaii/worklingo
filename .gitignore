@@ -4,3 +4,4 @@ node_modules/
 .env.local
 backend/bin/
 .logs/
+.env.prod
