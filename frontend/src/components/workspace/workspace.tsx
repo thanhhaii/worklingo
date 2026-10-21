@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Hash, PanelRight, PanelRightClose, Users, WifiOff } from "lucide-react";
+import { Hash, Menu, PanelRight, PanelRightClose, Users, WifiOff } from "lucide-react";
 import { PersonaAvatar } from "@/components/persona-avatar";
 import {
   Dialog,
@@ -63,6 +63,7 @@ export function Workspace({ sessionId, username }: { sessionId: string; username
   const isWide = useMediaQuery("(min-width: 1024px)");
   const [rightOpenPref, setRightOpenPref] = useState<boolean | null>(null);
   const rightOpen = rightOpenPref ?? isWide;
+  const [navOpen, setNavOpen] = useState(false);
   const [ending, setEnding] = useState(false);
   const [completedModal, setCompletedModal] = useState(false);
   const [scrollSignal, setScrollSignal] = useState(0);
@@ -142,6 +143,7 @@ export function Workspace({ sessionId, username }: { sessionId: string; username
       setActiveChannel(channelId);
       setHighlight(messageId);
       if (!isWide) setRightOpenPref(false);
+      setNavOpen(false);
     },
     [setActiveChannel, setHighlight, isWide],
   );
@@ -160,7 +162,7 @@ export function Workspace({ sessionId, username }: { sessionId: string; username
   }
 
   const intro = channel ? (
-    <div className="px-5 pt-10 pb-4">
+    <div className="px-3 pt-6 pb-4 md:px-5 md:pt-10">
       {channel.kind === "CHANNEL" ? (
         <>
           <div className="flex items-center gap-1 text-[28px] font-black text-[#1d1c1d]">
@@ -195,17 +197,36 @@ export function Workspace({ sessionId, username }: { sessionId: string; username
     : "Message";
 
   return (
-    <div className="flex min-h-0 flex-1 overflow-hidden">
-      <Sidebar username={username} />
+    <div className="relative flex min-h-0 flex-1 overflow-hidden">
+      {navOpen && (
+        <div className="fixed inset-0 z-40 bg-black/40 md:hidden" onClick={() => setNavOpen(false)} aria-hidden />
+      )}
+      <div
+        className={cn(
+          "h-full shrink-0 max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-50 max-md:transition-transform max-md:duration-200",
+          navOpen ? "max-md:translate-x-0 max-md:shadow-2xl" : "max-md:-translate-x-full",
+        )}
+      >
+        <Sidebar username={username} onNavigate={() => setNavOpen(false)} />
+      </div>
       <div className="relative flex min-w-0 flex-1">
         <main className="flex min-w-0 flex-1 flex-col bg-white">
-          <header className="flex h-12 shrink-0 items-center gap-3 border-b border-[#e1e1e1] px-5">
+          <header className="flex h-12 shrink-0 items-center gap-2 border-b border-[#e1e1e1] px-2 md:gap-3 md:px-5">
+            <button
+              type="button"
+              onClick={() => setNavOpen(true)}
+              className="relative flex size-8 shrink-0 items-center justify-center rounded text-[#616061] hover:bg-[#f0f0f0] md:hidden"
+              aria-label="Open channels"
+            >
+              <Menu className="size-5" />
+              {unreadTotal > 0 && <span className="absolute top-1 right-1 size-2 rounded-full bg-[#cd2553]" />}
+            </button>
             <div className="flex min-w-0 flex-1 items-center gap-2">
               {channel?.kind === "DM" ? (
                 <>
                   <PersonaAvatar persona={persona} size={24} className="rounded" />
                   <span className="truncate text-[18px] font-black text-[#1d1c1d]">{persona?.displayName}</span>
-                  <span className="truncate text-[13px] text-[#616061]">{persona?.role}</span>
+                  <span className="hidden truncate text-[13px] text-[#616061] sm:inline">{persona?.role}</span>
                 </>
               ) : channel ? (
                 <>
@@ -223,7 +244,7 @@ export function Workspace({ sessionId, username }: { sessionId: string; username
             </div>
             {wsStatus === "reconnecting" && (
               <span className="flex items-center gap-1 rounded bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-800">
-                <WifiOff className="size-3.5" /> Reconnecting…
+                <WifiOff className="size-3.5" /> <span className="max-sm:hidden">Reconnecting…</span>
               </span>
             )}
             {channel?.kind === "CHANNEL" && (
@@ -240,7 +261,7 @@ export function Workspace({ sessionId, username }: { sessionId: string; username
             <button
               type="button"
               onClick={() => setRightOpenPref(!rightOpen)}
-              className="flex size-8 items-center justify-center rounded text-[#616061] hover:bg-[#f0f0f0]"
+              className="flex size-8 shrink-0 items-center justify-center rounded text-[#616061] hover:bg-[#f0f0f0]"
               aria-label={rightOpen ? "Hide session panel" : "Show session panel"}
               title={rightOpen ? "Hide session panel" : "Show session panel"}
             >
@@ -249,7 +270,7 @@ export function Workspace({ sessionId, username }: { sessionId: string; username
           </header>
 
           {session && !active && (
-            <div className="shrink-0 border-b border-[#e1e1e1] bg-[#f8f8f8] px-5 py-2 text-sm text-[#616061]">
+            <div className="shrink-0 border-b border-[#e1e1e1] bg-[#f8f8f8] px-3 py-2 md:px-5 text-sm text-[#616061]">
               This session has ended ({session.status.toLowerCase()}). The workspace is read-only.{" "}
               <a href={`/session/${sessionId}/report`} className="font-bold text-[#1264a3] hover:underline">
                 View report
@@ -305,6 +326,9 @@ export function Workspace({ sessionId, username }: { sessionId: string; username
         )}
       </div>
 
+      {rightOpen && !isWide && (
+        <div className="absolute inset-0 z-30 bg-black/30" onClick={() => setRightOpenPref(false)} aria-hidden />
+      )}
       {rightOpen && (
         <div className={cn(!isWide && "absolute inset-y-0 right-0 z-40 shadow-2xl")}>
           <RightSidebar

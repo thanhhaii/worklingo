@@ -140,9 +140,9 @@ export function Composer({ placeholder, personas, disabled, disabledReason, onSe
   }
 
   return (
-    <div className="relative px-5 pb-5">
+    <div className="relative px-3 pb-3 md:px-5 md:pb-5">
       {mention && matches.length > 0 && (
-        <div className="absolute bottom-full left-5 z-20 mb-1 w-80 overflow-hidden rounded-lg border border-[#ddd] bg-white py-1 shadow-lg">
+        <div className="absolute bottom-full left-3 z-20 mb-1 w-80 max-w-[calc(100%-1.5rem)] overflow md:left-5-hidden rounded-lg border border-[#ddd] bg-white py-1 shadow-lg">
           <div className="px-3 py-1 text-xs font-bold text-[#616061]">People</div>
           {matches.map((p, i) => (
             <button
@@ -222,11 +222,11 @@ export function Composer({ placeholder, personas, disabled, disabledReason, onSe
           onKeyDown={onKeyDown}
           onClick={(e) => updateMention(e.currentTarget)}
           onBlur={() => setTimeout(() => setMention(null), 100)}
-          className="block max-h-[220px] min-h-[40px] w-full resize-none bg-transparent px-3 py-2 text-[15px] leading-[22px] text-[#1d1c1d] outline-none placeholder:text-[#868686] disabled:cursor-not-allowed"
+          className="block max-h-[220px] min-h-[40px] w-full resize-none bg-transparent px-3 py-2 text-base leading-[22px] md:text-[15px] text-[#1d1c1d] outline-none placeholder:text-[#868686] disabled:cursor-not-allowed"
           aria-label={placeholder}
         />
         <div className="flex items-center justify-between px-2 pb-1.5">
-          <span className="text-[11px] text-[#868686]">
+          <span className="text-[11px] text-[#868686] max-md:invisible">
             <b>Enter</b> to send · <b>Shift + Enter</b> for a new line · <b>@</b> to mention
           </span>
           <button
@@ -235,7 +235,7 @@ export function Composer({ placeholder, personas, disabled, disabledReason, onSe
             disabled={disabled || !value.trim() || sending}
             aria-label="Send message"
             className={cn(
-              "flex h-7 w-8 items-center justify-center rounded text-white transition-colors",
+              "flex h-8 w-9 items-center md:h-7 md:w-8 justify-center rounded text-white transition-colors",
               value.trim() && !disabled ? "bg-[#007a5a] hover:bg-[#148567]" : "bg-transparent text-[#9a9a9a]",
             )}
           >
@@ -266,7 +266,7 @@ function ToolbarBtn({
       disabled={disabled}
       onMouseDown={(e) => e.preventDefault()}
       onClick={onClick}
-      className="flex size-7 items-center justify-center rounded hover:bg-[#f0f0f0] hover:text-[#1d1c1d] disabled:opacity-40"
+      className="flex size-8 items-center justify-center rounded md:size-7 hover:bg-[#f0f0f0] hover:text-[#1d1c1d] disabled:opacity-40"
     >
       {children}
     </button>

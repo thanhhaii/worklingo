@@ -13,18 +13,19 @@ import (
 )
 
 const completeEvaluation = `-- name: CompleteEvaluation :one
-UPDATE evaluations SET status = 'DONE', grammar = $2, tone = $3, vocabulary = $4, overall = $5, summary = $6, corrections = $7
-WHERE session_id = $1 RETURNING id, session_id, status, grammar, tone, vocabulary, overall, summary, corrections, created_at
+UPDATE evaluations SET status = 'DONE', grammar = $2, tone = $3, vocabulary = $4, overall = $5, summary = $6, message_reviews = $7, task_reviews = $8
+WHERE session_id = $1 RETURNING id, session_id, status, grammar, tone, vocabulary, overall, summary, corrections, created_at, message_reviews, task_reviews
 `
 
 type CompleteEvaluationParams struct {
-	SessionID   uuid.UUID
-	Grammar     int32
-	Tone        int32
-	Vocabulary  int32
-	Overall     int32
-	Summary     string
-	Corrections json.RawMessage
+	SessionID      uuid.UUID
+	Grammar        int32
+	Tone           int32
+	Vocabulary     int32
+	Overall        int32
+	Summary        string
+	MessageReviews json.RawMessage
+	TaskReviews    json.RawMessage
 }
 
 func (q *Queries) CompleteEvaluation(ctx context.Context, arg CompleteEvaluationParams) (Evaluation, error) {
@@ -35,7 +36,8 @@ func (q *Queries) CompleteEvaluation(ctx context.Context, arg CompleteEvaluation
 		arg.Vocabulary,
 		arg.Overall,
 		arg.Summary,
-		arg.Corrections,
+		arg.MessageReviews,
+		arg.TaskReviews,
 	)
 	var i Evaluation
 	err := row.Scan(
@@ -49,12 +51,14 @@ func (q *Queries) CompleteEvaluation(ctx context.Context, arg CompleteEvaluation
 		&i.Summary,
 		&i.Corrections,
 		&i.CreatedAt,
+		&i.MessageReviews,
+		&i.TaskReviews,
 	)
 	return i, err
 }
 
 const failEvaluation = `-- name: FailEvaluation :one
-UPDATE evaluations SET status = 'FAILED', summary = $2 WHERE session_id = $1 RETURNING id, session_id, status, grammar, tone, vocabulary, overall, summary, corrections, created_at
+UPDATE evaluations SET status = 'FAILED', summary = $2 WHERE session_id = $1 RETURNING id, session_id, status, grammar, tone, vocabulary, overall, summary, corrections, created_at, message_reviews, task_reviews
 `
 
 type FailEvaluationParams struct {
@@ -76,12 +80,14 @@ func (q *Queries) FailEvaluation(ctx context.Context, arg FailEvaluationParams) 
 		&i.Summary,
 		&i.Corrections,
 		&i.CreatedAt,
+		&i.MessageReviews,
+		&i.TaskReviews,
 	)
 	return i, err
 }
 
 const getEvaluation = `-- name: GetEvaluation :one
-SELECT id, session_id, status, grammar, tone, vocabulary, overall, summary, corrections, created_at FROM evaluations WHERE session_id = $1
+SELECT id, session_id, status, grammar, tone, vocabulary, overall, summary, corrections, created_at, message_reviews, task_reviews FROM evaluations WHERE session_id = $1
 `
 
 func (q *Queries) GetEvaluation(ctx context.Context, sessionID uuid.UUID) (Evaluation, error) {
@@ -98,12 +104,14 @@ func (q *Queries) GetEvaluation(ctx context.Context, sessionID uuid.UUID) (Evalu
 		&i.Summary,
 		&i.Corrections,
 		&i.CreatedAt,
+		&i.MessageReviews,
+		&i.TaskReviews,
 	)
 	return i, err
 }
 
 const listPendingEvaluations = `-- name: ListPendingEvaluations :many
-SELECT id, session_id, status, grammar, tone, vocabulary, overall, summary, corrections, created_at FROM evaluations WHERE status = 'PENDING'
+SELECT id, session_id, status, grammar, tone, vocabulary, overall, summary, corrections, created_at, message_reviews, task_reviews FROM evaluations WHERE status = 'PENDING'
 `
 
 func (q *Queries) ListPendingEvaluations(ctx context.Context) ([]Evaluation, error) {
@@ -126,6 +134,8 @@ func (q *Queries) ListPendingEvaluations(ctx context.Context) ([]Evaluation, err
 			&i.Summary,
 			&i.Corrections,
 			&i.CreatedAt,
+			&i.MessageReviews,
+			&i.TaskReviews,
 		); err != nil {
 			return nil, err
 		}
@@ -140,7 +150,7 @@ func (q *Queries) ListPendingEvaluations(ctx context.Context) ([]Evaluation, err
 const upsertPendingEvaluation = `-- name: UpsertPendingEvaluation :one
 INSERT INTO evaluations (session_id, status) VALUES ($1, 'PENDING')
 ON CONFLICT (session_id) DO UPDATE SET status = 'PENDING'
-RETURNING id, session_id, status, grammar, tone, vocabulary, overall, summary, corrections, created_at
+RETURNING id, session_id, status, grammar, tone, vocabulary, overall, summary, corrections, created_at, message_reviews, task_reviews
 `
 
 func (q *Queries) UpsertPendingEvaluation(ctx context.Context, sessionID uuid.UUID) (Evaluation, error) {
@@ -157,6 +167,8 @@ func (q *Queries) UpsertPendingEvaluation(ctx context.Context, sessionID uuid.UU
 		&i.Summary,
 		&i.Corrections,
 		&i.CreatedAt,
+		&i.MessageReviews,
+		&i.TaskReviews,
 	)
 	return i, err
 }

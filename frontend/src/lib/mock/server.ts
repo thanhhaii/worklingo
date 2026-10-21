@@ -12,11 +12,16 @@ import type {
   Deadline,
   Evaluation,
   Message,
+  MessageIssue,
+  MessageReview,
   ServerEvent,
   Session,
+  TalkingPoint,
   Task,
+  TaskReview,
   User,
   Warning,
+  WorkContext,
 } from "../types";
 import { DEFAULT_PERSONAS, CHANNEL_ORDER } from "../personas";
 
@@ -35,6 +40,8 @@ type DB = {
   deadlines: Deadline[];
   warnings: Warning[];
   evaluations: Evaluation[];
+  /** ids of tasks whose single follow-up was already sent */
+  followUps: string[];
 };
 
 const emptyDb = (): DB => ({
@@ -46,6 +53,7 @@ const emptyDb = (): DB => ({
   deadlines: [],
   warnings: [],
   evaluations: [],
+  followUps: [],
 });
 
 const db: DB = load();
@@ -106,7 +114,31 @@ function publicSession(s: DB["sessions"][number]): Session {
     expiresAt: s.expiresAt,
     endedAt: s.endedAt,
     warnings: s.warnings,
+    workContext: s.workContext ?? null,
   };
+}
+
+const MOCK_WORK_CONTEXT: WorkContext = {
+  project: "HR Portal",
+  projectSummary: "Cổng nhân sự nội bộ để quản lý nhân viên, nghỉ phép và chấm công cho khách hàng của công ty.",
+  feature: "Tính năng quản lý user (danh sách, tạo mới, phân quyền)",
+  progress: "Xong khoảng 70%: API và UI danh sách user đã xong, còn phần phân quyền",
+  blocker: "Đang chờ team DevOps cấp quyền truy cập môi trường staging để test phân quyền",
+  notes: [
+    "Demo cho khách hàng vào thứ Sáu tuần này",
+    "Minh (backend) đang nghỉ phép đến thứ Tư",
+    "Stack: Go, PostgreSQL, Next.js",
+  ],
+};
+
+function makePoints(contents: string[]): TalkingPoint[] {
+  return contents.map((content, position) => ({
+    id: uuid(),
+    position,
+    content,
+    status: "PENDING" as const,
+    reason: "",
+  }));
 }
 
 function userFromToken(token: string | null) {
@@ -333,6 +365,48 @@ function resolveDeadlines(sessionId: string, channelId: string, content: string)
   save();
 }
 
+/** Naive coverage: each valid reply covers the next pending point; one follow-up per task. */
+function coverTalkingPoints(sessionId: string, ch: Channel, msg: Message): { followUp: Task | null } {
+  let followUp: Task | null = null;
+  if (msg.content.trim().split(/\s+/).length < 2) return { followUp };
+  let candidates = db.tasks.filter(
+    (t) =>
+      t.sessionId === sessionId &&
+      t.channelId === ch.id &&
+      t.status !== "DONE" &&
+      t.createdAt < msg.createdAt &&
+      (t.talkingPoints ?? []).some((p) => p.status === "PENDING"),
+  );
+  if (msg.parentId) candidates = candidates.filter((t) => t.messageId === msg.parentId);
+  else candidates = candidates.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 2);
+  for (const t of candidates) {
+    const next = [...(t.talkingPoints ?? [])].sort((a, b) => a.position - b.position).find((p) => p.status === "PENDING");
+    if (!next) continue;
+    next.status = "COVERED";
+    next.reason = "Bạn đã truyền đạt đúng ý này.";
+    const pending = (t.talkingPoints ?? []).some((p) => p.status === "PENDING");
+    if (!pending) t.status = "DONE";
+    emit(sessionId, { type: "task.updated", data: t });
+    if (pending && t.status === "ACKNOWLEDGED" && !db.followUps.includes(t.id) && !followUp) {
+      db.followUps.push(t.id);
+      followUp = t;
+    }
+  }
+  save();
+  return { followUp };
+}
+
+async function sendFollowUp(sessionId: string, ch: Channel, t: Task) {
+  const msg = await streamPersona(
+    sessionId,
+    ch.id,
+    t.personaId,
+    "Thanks, that helps. One thing is still missing though: could you also cover the rest of what I asked for? A short reply here in the thread is fine.",
+    t.messageId,
+  );
+  if (msg) createDeadline(sessionId, ch.id, msg.id, t.id, RESPONSE_TIMEOUT_MS);
+}
+
 // ---------------------------------------------------------------- scenario
 
 type Step = { key: string; atMs: number; run: (sessionId: string) => Promise<void> | void };
@@ -381,10 +455,47 @@ const SCENARIO: Step[] = [
         messageId: msg.id,
         personaId: "alex",
         title: "Write stakeholder status update for checkout 502s",
-        description: "Summarise impact, current status and the time of the next update.",
         priority: "CRITICAL",
         status: "OPEN",
         createdAt: nowIso(),
+        talkingPoints: makePoints([
+          "Khoảng 8% request checkout bị lỗi 502 từ 10:42 UTC",
+          "Đội đang điều tra, nghi do database connection pool bị đầy",
+          "Sẽ cập nhật lại sau 30 phút",
+        ]),
+      };
+      db.tasks.push(task);
+      save();
+      emit(sid, { type: "task.new", data: task });
+      createDeadline(sid, ch.id, msg.id, task.id, RESPONSE_TIMEOUT_MS);
+    },
+  },
+  {
+    key: "task-progress",
+    atMs: 40_000,
+    run: async (sid) => {
+      const ch = channelByName(sid, "general");
+      const msg = await streamPersona(
+        sid,
+        ch.id,
+        "sarah",
+        "@you before the demo, could you give me a quick **progress update** on the user management feature? I need to know where we stand and whether anything is blocking you.",
+      );
+      if (!msg) return;
+      const task: Task = {
+        id: uuid(),
+        sessionId: sid,
+        channelId: ch.id,
+        messageId: msg.id,
+        personaId: "sarah",
+        title: "Update Sarah on user management progress",
+        priority: "NORMAL",
+        status: "OPEN",
+        createdAt: nowIso(),
+        talkingPoints: makePoints([
+          "Feature quản lý user đã xong khoảng 70%",
+          "Đang bị chặn vì chờ quyền truy cập staging từ DevOps",
+        ]),
       };
       db.tasks.push(task);
       save();
@@ -454,7 +565,8 @@ function finishSession(sessionId: string): Session | null {
       vocabulary: 0,
       overall: 0,
       summary: "",
-      corrections: [],
+      messageReviews: [],
+      taskReviews: [],
       createdAt: nowIso(),
     };
     db.evaluations.push(ev);
@@ -481,27 +593,65 @@ function completeEvaluation(sessionId: string) {
     `You sent ${userMsgs.length} message(s) and received ${s.warnings} ghosting warning(s). ` +
     "Your tone was generally polite and collaborative. Focus on article usage (a/the) and on using more precise business vocabulary when giving status updates. " +
     "When a stakeholder asks a direct question, acknowledge it quickly before giving a full answer.";
-  const sample = userMsgs[0]?.content ?? "I will send you update tomorrow";
-  ev.corrections = [
-    {
-      original: sample.slice(0, 120),
-      corrected: "I'll send you an update tomorrow.",
-      explanation: "Use the indefinite article 'an' before 'update'; contractions sound more natural in chat.",
-      category: "GRAMMAR",
-    },
-    {
-      original: "Why nobody told me about this?",
-      corrected: "Could someone fill me in on what happened here?",
-      explanation: "Direct 'why' questions can sound accusatory; a softened request keeps the tone collaborative.",
-      category: "TONE",
-    },
-    {
-      original: "The site is broken a lot.",
-      corrected: "The site is experiencing intermittent outages.",
-      explanation: "'Intermittent outages' is the standard term in incident communication.",
-      category: "VOCABULARY",
-    },
-  ];
+  ev.messageReviews = userMsgs
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    .map((m, idx): MessageReview => {
+      const ch = db.channels.find((c) => c.id === m.channelId);
+      const channelLabel =
+        ch?.kind === "DM"
+          ? `DM: ${DEFAULT_PERSONAS.find((p) => p.id === ch.personaId)?.displayName ?? ch.name}`
+          : `#${ch?.name ?? "unknown"}`;
+      const issues: MessageIssue[] = [];
+      const words = m.content.split(/\s+/).filter(Boolean);
+      if (idx % 3 !== 2 && words.length >= 2) {
+        issues.push({
+          original: words.slice(0, Math.min(3, words.length)).join(" "),
+          corrected: "I'll send you an update tomorrow.",
+          explanation: "Thiếu mạo từ 'an' trước 'update'; dùng dạng rút gọn nghe tự nhiên hơn trong chat.",
+          category: "GRAMMAR",
+          severity: idx % 2 === 0 ? "MAJOR" : "MINOR",
+        });
+      }
+      if (idx % 3 === 1 && words.length >= 1) {
+        issues.push({
+          original: words[words.length - 1]!,
+          corrected: "Could you let me know when you're free?",
+          explanation: "Câu hỏi trực tiếp có thể nghe hơi cộc; nói mềm hơn để giữ giọng hợp tác.",
+          category: "TONE",
+          severity: "MINOR",
+        });
+      }
+      return { messageId: m.id, channelLabel, content: m.content, createdAt: m.createdAt, issues };
+    });
+  ev.taskReviews = db.tasks
+    .filter((t) => t.sessionId === sessionId)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    .map((t): TaskReview => {
+      const replies = userMsgs.filter(
+        (m) => m.channelId === t.channelId && m.createdAt > t.createdAt && (!m.parentId || m.parentId === t.messageId),
+      );
+      let ri = 0;
+      return {
+        taskId: t.id,
+        title: t.title,
+        personaId: t.personaId,
+        status: t.status,
+        talkingPoints: (t.talkingPoints ?? []).map((p) => {
+          const covered = p.status === "COVERED";
+          const quote = covered ? (replies[ri++]?.content ?? "") : (replies[replies.length - 1]?.content ?? "");
+          return {
+            talkingPointId: p.id,
+            content: p.content,
+            covered,
+            learnerQuote: quote,
+            reason: covered
+              ? "Bạn đã truyền đạt đúng ý này."
+              : "Bạn chưa nhắc đến nội dung này trong câu trả lời.",
+            sample: "About 8% of checkout requests have failed with 502 errors since 10:42 UTC.",
+          };
+        }),
+      };
+    });
   save();
   emit(sessionId, { type: "evaluation.updated", data: ev });
 }
@@ -599,6 +749,7 @@ async function handle(req: HttpRequest): Promise<HttpResponse> {
         expiresAt: new Date(start.getTime() + SESSION_MINUTES * 60_000).toISOString(),
         endedAt: null,
         warnings: 0,
+        workContext: MOCK_WORK_CONTEXT,
         scenarioDone: [] as string[],
       };
       db.sessions.push(s);
@@ -661,7 +812,9 @@ async function handle(req: HttpRequest): Promise<HttpResponse> {
         });
         emit(s.id, { type: "message.new", data: msg });
         resolveDeadlines(s.id, ch.id, content);
-        void replyTo(s.id, ch, msg);
+        const { followUp } = coverTalkingPoints(s.id, ch, msg);
+        if (followUp) void sendFollowUp(s.id, ch, followUp);
+        else void replyTo(s.id, ch, msg);
         return ok(msg, 201);
       }
     }

@@ -7,7 +7,7 @@ RETURNING *;
 SELECT * FROM evaluations WHERE session_id = $1;
 
 -- name: CompleteEvaluation :one
-UPDATE evaluations SET status = 'DONE', grammar = $2, tone = $3, vocabulary = $4, overall = $5, summary = $6, corrections = $7
+UPDATE evaluations SET status = 'DONE', grammar = $2, tone = $3, vocabulary = $4, overall = $5, summary = $6, message_reviews = $7, task_reviews = $8
 WHERE session_id = $1 RETURNING *;
 
 -- name: FailEvaluation :one

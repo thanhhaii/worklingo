@@ -85,13 +85,13 @@ export default function DashboardPage() {
 
   return (
     <div className="flex flex-1 flex-col bg-[#f8f8f8]">
-      <header className="flex h-14 shrink-0 items-center justify-between bg-[#3F0E40] px-6 text-white">
+      <header className="flex h-14 shrink-0 items-center justify-between bg-[#3F0E40] px-4 text-white sm:px-6">
         <div className="flex items-center gap-2">
           <Logo className="size-7" />
           <span className="text-lg font-black tracking-tight">WorkLingo</span>
         </div>
         <div className="flex items-center gap-3 text-sm">
-          <span className="opacity-80">
+          <span className="opacity-80 max-sm:hidden">
             Signed in as <b>{user?.username}</b>
           </span>
           <Button
@@ -103,13 +103,13 @@ export default function DashboardPage() {
               router.replace("/login");
             }}
           >
-            <LogOut /> Sign out
+            <LogOut /> <span className="max-sm:hidden">Sign out</span>
           </Button>
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-4xl flex-1 px-6 py-10">
-        <section className="rounded-xl border border-[#e1e1e1] bg-white p-8 shadow-sm">
+      <main className="mx-auto w-full max-w-4xl flex-1 px-4 py-6 sm:px-6 sm:py-10">
+        <section className="rounded-xl border border-[#e1e1e1] bg-white p-5 shadow-sm sm:p-8">
           <h1 className="text-2xl font-bold text-[#1d1c1d]">Welcome back, {user?.username}</h1>
           <p className="mt-2 max-w-2xl text-[15px] text-[#454245]">
             Join a simulated workspace for 60 minutes. Your AI teammates will chat, ask questions and drop surprise
@@ -183,7 +183,7 @@ export default function DashboardPage() {
                 <Link
                   key={s.id}
                   href={`/session/${s.id}/report`}
-                  className="flex items-center gap-4 border-b border-[#eee] px-5 py-3 last:border-0 hover:bg-[#f8f8f8]"
+                  className="flex items-center gap-2 border-b border-[#eee] px-4 py-3 sm:gap-4 sm:px-5 last:border-0 hover:bg-[#f8f8f8]"
                 >
                   <div className="min-w-0 flex-1">
                     <div className="text-sm font-bold text-[#1d1c1d]">{formatDateTime(s.startedAt)}</div>
@@ -191,8 +191,8 @@ export default function DashboardPage() {
                       {durationBetween(s.startedAt, s.endedAt)} · {s.warnings} warning(s)
                     </div>
                   </div>
-                  <Badge variant={s.status === "COMPLETED" ? "secondary" : "outline"}>{s.status}</Badge>
-                  <div className="flex w-56 items-center justify-end gap-2 text-xs text-[#616061]">
+                  <Badge variant={s.status === "COMPLETED" ? "secondary" : "outline"} className="max-sm:hidden">{s.status}</Badge>
+                  <div className="flex shrink-0 items-center justify-end sm:w-56 gap-2 text-xs text-[#616061]">
                     {ev?.status === "DONE" ? (
                       <>
                         <span className="hidden sm:inline">G {ev.grammar} · T {ev.tone} · V {ev.vocabulary}</span>

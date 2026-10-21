@@ -33,16 +33,18 @@ type Deadline struct {
 }
 
 type Evaluation struct {
-	ID          uuid.UUID
-	SessionID   uuid.UUID
-	Status      string
-	Grammar     int32
-	Tone        int32
-	Vocabulary  int32
-	Overall     int32
-	Summary     string
-	Corrections json.RawMessage
-	CreatedAt   time.Time
+	ID             uuid.UUID
+	SessionID      uuid.UUID
+	Status         string
+	Grammar        int32
+	Tone           int32
+	Vocabulary     int32
+	Overall        int32
+	Summary        string
+	Corrections    json.RawMessage
+	CreatedAt      time.Time
+	MessageReviews json.RawMessage
+	TaskReviews    json.RawMessage
 }
 
 type Message struct {
@@ -58,28 +60,40 @@ type Message struct {
 }
 
 type Session struct {
-	ID         uuid.UUID
-	UserID     uuid.UUID
-	Mode       string
-	Status     string
-	StartedAt  time.Time
-	ExpiresAt  time.Time
-	EndedAt    *time.Time
-	Warnings   int32
-	NextTaskAt *time.Time
+	ID          uuid.UUID
+	UserID      uuid.UUID
+	Mode        string
+	Status      string
+	StartedAt   time.Time
+	ExpiresAt   time.Time
+	EndedAt     *time.Time
+	Warnings    int32
+	NextTaskAt  *time.Time
+	WorkContext []byte
+}
+
+type TalkingPoint struct {
+	ID               uuid.UUID
+	TaskID           uuid.UUID
+	Position         int32
+	Content          string
+	Status           string
+	Reason           string
+	CoveredMessageID *uuid.UUID
+	CoveredAt        *time.Time
 }
 
 type Task struct {
-	ID          uuid.UUID
-	SessionID   uuid.UUID
-	ChannelID   uuid.UUID
-	MessageID   uuid.UUID
-	PersonaID   string
-	Title       string
-	Description string
-	Priority    string
-	Status      string
-	CreatedAt   time.Time
+	ID           uuid.UUID
+	SessionID    uuid.UUID
+	ChannelID    uuid.UUID
+	MessageID    uuid.UUID
+	PersonaID    string
+	Title        string
+	Priority     string
+	Status       string
+	CreatedAt    time.Time
+	FollowUpSent bool
 }
 
 type User struct {

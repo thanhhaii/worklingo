@@ -11,19 +11,62 @@ import (
 	"github.com/google/uuid"
 )
 
+const acknowledgeTask = `-- name: AcknowledgeTask :one
+UPDATE tasks SET status = 'ACKNOWLEDGED' WHERE id = $1 AND status = 'OPEN' RETURNING id, session_id, channel_id, message_id, persona_id, title, priority, status, created_at, follow_up_sent
+`
+
+func (q *Queries) AcknowledgeTask(ctx context.Context, id uuid.UUID) (Task, error) {
+	row := q.db.QueryRow(ctx, acknowledgeTask, id)
+	var i Task
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.ChannelID,
+		&i.MessageID,
+		&i.PersonaID,
+		&i.Title,
+		&i.Priority,
+		&i.Status,
+		&i.CreatedAt,
+		&i.FollowUpSent,
+	)
+	return i, err
+}
+
+const claimTaskFollowUp = `-- name: ClaimTaskFollowUp :one
+UPDATE tasks SET follow_up_sent = true WHERE id = $1 AND follow_up_sent = false RETURNING id, session_id, channel_id, message_id, persona_id, title, priority, status, created_at, follow_up_sent
+`
+
+func (q *Queries) ClaimTaskFollowUp(ctx context.Context, id uuid.UUID) (Task, error) {
+	row := q.db.QueryRow(ctx, claimTaskFollowUp, id)
+	var i Task
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.ChannelID,
+		&i.MessageID,
+		&i.PersonaID,
+		&i.Title,
+		&i.Priority,
+		&i.Status,
+		&i.CreatedAt,
+		&i.FollowUpSent,
+	)
+	return i, err
+}
+
 const createTask = `-- name: CreateTask :one
-INSERT INTO tasks (session_id, channel_id, message_id, persona_id, title, description, priority)
-VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, session_id, channel_id, message_id, persona_id, title, description, priority, status, created_at
+INSERT INTO tasks (session_id, channel_id, message_id, persona_id, title, priority)
+VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, session_id, channel_id, message_id, persona_id, title, priority, status, created_at, follow_up_sent
 `
 
 type CreateTaskParams struct {
-	SessionID   uuid.UUID
-	ChannelID   uuid.UUID
-	MessageID   uuid.UUID
-	PersonaID   string
-	Title       string
-	Description string
-	Priority    string
+	SessionID uuid.UUID
+	ChannelID uuid.UUID
+	MessageID uuid.UUID
+	PersonaID string
+	Title     string
+	Priority  string
 }
 
 func (q *Queries) CreateTask(ctx context.Context, arg CreateTaskParams) (Task, error) {
@@ -33,7 +76,6 @@ func (q *Queries) CreateTask(ctx context.Context, arg CreateTaskParams) (Task, e
 		arg.MessageID,
 		arg.PersonaID,
 		arg.Title,
-		arg.Description,
 		arg.Priority,
 	)
 	var i Task
@@ -44,16 +86,38 @@ func (q *Queries) CreateTask(ctx context.Context, arg CreateTaskParams) (Task, e
 		&i.MessageID,
 		&i.PersonaID,
 		&i.Title,
-		&i.Description,
 		&i.Priority,
 		&i.Status,
 		&i.CreatedAt,
+		&i.FollowUpSent,
+	)
+	return i, err
+}
+
+const getTask = `-- name: GetTask :one
+SELECT id, session_id, channel_id, message_id, persona_id, title, priority, status, created_at, follow_up_sent FROM tasks WHERE id = $1
+`
+
+func (q *Queries) GetTask(ctx context.Context, id uuid.UUID) (Task, error) {
+	row := q.db.QueryRow(ctx, getTask, id)
+	var i Task
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.ChannelID,
+		&i.MessageID,
+		&i.PersonaID,
+		&i.Title,
+		&i.Priority,
+		&i.Status,
+		&i.CreatedAt,
+		&i.FollowUpSent,
 	)
 	return i, err
 }
 
 const listTasks = `-- name: ListTasks :many
-SELECT id, session_id, channel_id, message_id, persona_id, title, description, priority, status, created_at FROM tasks WHERE session_id = $1 ORDER BY created_at
+SELECT id, session_id, channel_id, message_id, persona_id, title, priority, status, created_at, follow_up_sent FROM tasks WHERE session_id = $1 ORDER BY created_at
 `
 
 func (q *Queries) ListTasks(ctx context.Context, sessionID uuid.UUID) ([]Task, error) {
@@ -72,10 +136,10 @@ func (q *Queries) ListTasks(ctx context.Context, sessionID uuid.UUID) ([]Task, e
 			&i.MessageID,
 			&i.PersonaID,
 			&i.Title,
-			&i.Description,
 			&i.Priority,
 			&i.Status,
 			&i.CreatedAt,
+			&i.FollowUpSent,
 		); err != nil {
 			return nil, err
 		}
@@ -87,8 +151,30 @@ func (q *Queries) ListTasks(ctx context.Context, sessionID uuid.UUID) ([]Task, e
 	return items, nil
 }
 
+const markTaskDone = `-- name: MarkTaskDone :one
+UPDATE tasks SET status = 'DONE' WHERE id = $1 AND status <> 'DONE' RETURNING id, session_id, channel_id, message_id, persona_id, title, priority, status, created_at, follow_up_sent
+`
+
+func (q *Queries) MarkTaskDone(ctx context.Context, id uuid.UUID) (Task, error) {
+	row := q.db.QueryRow(ctx, markTaskDone, id)
+	var i Task
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.ChannelID,
+		&i.MessageID,
+		&i.PersonaID,
+		&i.Title,
+		&i.Priority,
+		&i.Status,
+		&i.CreatedAt,
+		&i.FollowUpSent,
+	)
+	return i, err
+}
+
 const setTaskStatus = `-- name: SetTaskStatus :one
-UPDATE tasks SET status = $2 WHERE id = $1 RETURNING id, session_id, channel_id, message_id, persona_id, title, description, priority, status, created_at
+UPDATE tasks SET status = $2 WHERE id = $1 RETURNING id, session_id, channel_id, message_id, persona_id, title, priority, status, created_at, follow_up_sent
 `
 
 type SetTaskStatusParams struct {
@@ -106,10 +192,10 @@ func (q *Queries) SetTaskStatus(ctx context.Context, arg SetTaskStatusParams) (T
 		&i.MessageID,
 		&i.PersonaID,
 		&i.Title,
-		&i.Description,
 		&i.Priority,
 		&i.Status,
 		&i.CreatedAt,
+		&i.FollowUpSent,
 	)
 	return i, err
 }

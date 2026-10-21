@@ -27,6 +27,16 @@ type Session = {
   id: string; mode: "AI_SOLO"; status: "ACTIVE" | "COMPLETED" | "ABORTED";
   startedAt: string; expiresAt: string; endedAt: string | null;
   warnings: number;            // ghosting warnings count
+  workContext: WorkContext | null; // generated once per session (null for old sessions)
+}
+
+type WorkContext = {           // fictional project situation; Vietnamese (proper names may stay English)
+  project: string;             // e.g. "HR Portal"
+  projectSummary: string;      // 1 sentence
+  feature: string;             // the feature the learner is building
+  progress: string;            // e.g. "Xong khoảng 70%: API và UI danh sách user đã xong, còn phân quyền"
+  blocker: string;
+  notes: string[];             // 2-4 extra facts
 }
 
 type Channel = {
@@ -48,10 +58,19 @@ type Message = {
 
 type Task = {
   id: string; sessionId: string; channelId: string; messageId: string; // message that announced the task
-  personaId: string; title: string; description: string;
+  personaId: string; title: string;
   priority: "NORMAL" | "CRITICAL";
-  status: "OPEN" | "ACKNOWLEDGED" | "DONE";
+  status: "OPEN" | "ACKNOWLEDGED" | "DONE";  // ACKNOWLEDGED = deadline resolved; DONE = all talking points covered
   createdAt: string;
+  talkingPoints: TalkingPoint[];             // ordered by position, 1-3
+}
+
+type TalkingPoint = {   // content the learner must get across (Vietnamese, content only)
+  id: string;
+  position: number;     // 0-based
+  content: string;
+  status: "PENDING" | "COVERED";  // COVERED is sticky
+  reason: string;       // Vietnamese; latest judge reason ("" if never judged)
 }
 
 type Deadline = {   // 5-minute response requirement, server-authoritative
@@ -63,12 +82,42 @@ type Deadline = {   // 5-minute response requirement, server-authoritative
 
 type Warning = { id: string; sessionId: string; deadlineId: string; reason: string; createdAt: string }
 
+type IssueCategory = "GRAMMAR" | "TONE" | "VOCABULARY"
+type IssueSeverity = "MAJOR" | "MINOR"
+type MessageIssue = {
+  original: string;     // exact substring of the learner message
+  corrected: string;    // English
+  explanation: string;  // Vietnamese
+  category: IssueCategory; severity: IssueSeverity;
+}
+type MessageReview = {  // one per learner message
+  messageId: string;
+  channelLabel: string; // "#general" or "DM: Sarah Chen"
+  content: string; createdAt: string;
+  issues: MessageIssue[]; // [] = no issues
+}
+
+type TalkingPointReview = {
+  talkingPointId: string;
+  content: string;       // Vietnamese
+  covered: boolean;      // from DB status
+  learnerQuote: string;  // exact learner text that covered it / best attempt, "" if none
+  reason: string;        // Vietnamese
+  sample: string;        // English sample sentence ("" if the review call failed)
+}
+type TaskReview = {
+  taskId: string; title: string; personaId: string;
+  status: "OPEN" | "ACKNOWLEDGED" | "DONE";
+  talkingPoints: TalkingPointReview[];
+}
+
 type Evaluation = {
   id: string; sessionId: string;
   status: "PENDING" | "DONE" | "FAILED";
   grammar: number; tone: number; vocabulary: number; overall: number;  // 0-100
   summary: string;
-  corrections: { original: string; corrected: string; explanation: string; category: "GRAMMAR" | "TONE" | "VOCABULARY" }[];
+  messageReviews: MessageReview[]; // chronological, ALL learner messages; always an array
+  taskReviews: TaskReview[];       // chronological by task; always an array
   createdAt: string;
 }
 ```

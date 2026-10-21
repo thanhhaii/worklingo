@@ -13,6 +13,7 @@ import (
 
 	"github.com/worklingo/backend/internal/chat"
 	"github.com/worklingo/backend/internal/deadline"
+	"github.com/worklingo/backend/internal/dto"
 	"github.com/worklingo/backend/internal/llm"
 	"github.com/worklingo/backend/internal/store"
 )
@@ -72,8 +73,25 @@ func (e *Engine) OnUserMessage(ctx context.Context, ch store.Channel, user store
 		if ctx.Err() != nil {
 			return
 		}
-		e.Reply(ctx, ch, user, pid, m.ParentID)
+		e.Reply(ctx, ch, user, pid, m.ParentID, ReplyOptions{})
 	}
+}
+
+// ReplyOptions tweaks a persona reply.
+type ReplyOptions struct {
+	// ExtraInstruction is appended to the writing prompt (e.g. a follow-up request).
+	ExtraInstruction string
+	// SkipDeadline stops the engine from creating its own deadline for the reply.
+	SkipDeadline bool
+}
+
+// FollowUp posts a task follow-up as personaID in the given thread, serialised
+// with the channel's other persona replies. ok is false if the reply failed.
+func (e *Engine) FollowUp(ctx context.Context, ch store.Channel, user store.User, personaID string, parentID *uuid.UUID, instruction string) (store.Message, bool) {
+	mu := e.lock(ch.ID)
+	mu.Lock()
+	defer mu.Unlock()
+	return e.Reply(ctx, ch, user, personaID, parentID, ReplyOptions{ExtraInstruction: instruction, SkipDeadline: true})
 }
 
 func (e *Engine) chooseResponders(ctx context.Context, ch store.Channel, user store.User, m store.Message) []string {
@@ -222,26 +240,34 @@ func (e *Engine) transcript(hist []store.Message, username string) string {
 	return sb.String()
 }
 
-// Reply streams one persona message into the channel (or thread).
-func (e *Engine) Reply(ctx context.Context, ch store.Channel, user store.User, personaID string, parentID *uuid.UUID) {
+// Reply streams one persona message into the channel (or thread). The bool is
+// true if the message was generated successfully (not an offline placeholder).
+func (e *Engine) Reply(ctx context.Context, ch store.Channel, user store.User, personaID string, parentID *uuid.UUID, opts ReplyOptions) (store.Message, bool) {
 	p, ok := e.cat.Get(personaID)
 	if !ok {
-		return
+		return store.Message{}, false
 	}
 	hist, err := e.chat.History(ctx, ch.ID, historySize)
 	if err != nil {
 		e.log.Error("load history", "err", err)
-		return
+		return store.Message{}, false
 	}
-	sys := e.cat.SystemPrompt(p, user.Username, e.ChannelLabel(ch, user.Username))
+	var wc *dto.WorkContext
+	if sess, err := e.q.GetSession(ctx, ch.SessionID); err == nil {
+		wc = dto.ParseWorkContext(sess.WorkContext)
+	}
+	sys := e.cat.SystemPrompt(p, user.Username, e.ChannelLabel(ch, user.Username), wc)
 	userPrompt := fmt.Sprintf("Conversation so far in %s (oldest first):\n%s\nWrite your next message as %s (@%s). Reply with the message text only.",
 		e.ChannelLabel(ch, user.Username), e.transcript(hist, user.Username), p.DisplayName, p.Handle)
+	if opts.ExtraInstruction != "" {
+		userPrompt += "\n\n" + opts.ExtraInstruction
+	}
 
 	e.chat.Typing(ch.SessionID, ch.ID, p.ID)
 	msg, err := e.chat.StartPersonaStream(ctx, ch.SessionID, ch.ID, p.ID, parentID)
 	if err != nil {
 		e.log.Error("start persona stream", "err", err)
-		return
+		return store.Message{}, false
 	}
 	sctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
@@ -263,11 +289,13 @@ func (e *Engine) Reply(ctx context.Context, ch store.Channel, user store.User, p
 	final, ferr := e.chat.FinishPersonaStream(fctx, msg, full)
 	if ferr != nil {
 		e.log.Error("finish persona stream", "err", ferr)
-		return
+		return msg, false
 	}
-	if err == nil && ctx.Err() == nil {
+	ok = err == nil && ctx.Err() == nil
+	if ok && !opts.SkipDeadline {
 		e.maybeCreateDeadline(ctx, final, user.Username)
 	}
+	return final, ok
 }
 
 // cleanReply strips a leading "Name:" prefix the model sometimes adds.

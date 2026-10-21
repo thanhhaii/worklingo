@@ -3,6 +3,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"strings"
@@ -21,6 +22,7 @@ import (
 	"github.com/worklingo/backend/internal/persona"
 	"github.com/worklingo/backend/internal/scenario"
 	"github.com/worklingo/backend/internal/store"
+	"github.com/worklingo/backend/internal/workctx"
 	"github.com/worklingo/backend/internal/ws"
 )
 
@@ -37,6 +39,7 @@ type Manager struct {
 	scheduler *scenario.Scheduler
 	deadlines *deadline.Service
 	eval      *evaluation.Service
+	wctx      *workctx.Generator
 	hub       ws.Broadcaster
 	duration  time.Duration
 	log       *slog.Logger
@@ -46,8 +49,8 @@ type Manager struct {
 }
 
 func NewManager(pool *pgxpool.Pool, q *store.Queries, reg *lifecycle.Registry, e *persona.Engine, sch *scenario.Scheduler,
-	d *deadline.Service, ev *evaluation.Service, hub ws.Broadcaster, duration time.Duration, log *slog.Logger) *Manager {
-	return &Manager{pool: pool, q: q, reg: reg, engine: e, scheduler: sch, deadlines: d, eval: ev, hub: hub,
+	d *deadline.Service, ev *evaluation.Service, wc *workctx.Generator, hub ws.Broadcaster, duration time.Duration, log *slog.Logger) *Manager {
+	return &Manager{pool: pool, q: q, reg: reg, engine: e, scheduler: sch, deadlines: d, eval: ev, wctx: wc, hub: hub,
 		duration: duration, log: log, timers: map[uuid.UUID]*time.Timer{}}
 }
 
@@ -55,12 +58,14 @@ func NewManager(pool *pgxpool.Pool, q *store.Queries, reg *lifecycle.Registry, e
 func (m *Manager) Create(ctx context.Context, user store.User) (store.Session, error) {
 	now := time.Now()
 	first := m.scheduler.FirstAt(now)
+	// Generate the work context before the transaction (LLM call; falls back to static).
+	wcRaw, _ := json.Marshal(m.wctx.Generate(ctx))
 	var sess store.Session
 	var general store.Channel
 	err := pgx.BeginFunc(ctx, m.pool, func(tx pgx.Tx) error {
 		q := m.q.WithTx(tx)
 		var err error
-		sess, err = q.CreateSession(ctx, store.CreateSessionParams{UserID: user.ID, ExpiresAt: now.Add(m.duration), NextTaskAt: &first})
+		sess, err = q.CreateSession(ctx, store.CreateSessionParams{UserID: user.ID, ExpiresAt: now.Add(m.duration), NextTaskAt: &first, WorkContext: wcRaw})
 		if err != nil {
 			var pe *pgconn.PgError
 			if errors.As(err, &pe) && pe.Code == "23505" {

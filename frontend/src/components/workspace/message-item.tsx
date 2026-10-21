@@ -1,13 +1,14 @@
 "use client";
 
-import { memo } from "react";
-import { MessageSquareText, TriangleAlert, Loader2 } from "lucide-react";
+import { memo, useState } from "react";
+import { ChevronDown, MessageSquareText, TriangleAlert, Loader2 } from "lucide-react";
 import { PersonaAvatar } from "@/components/persona-avatar";
 import { formatTime } from "@/lib/format";
 import type { Deadline, Message, Persona, Task } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { DeadlineBadge } from "./deadline-badge";
 import { Markdown } from "./markdown";
+import { TalkingPointList } from "./talking-points";
 
 export type MessageItemProps = {
   message: Message;
@@ -23,6 +24,43 @@ export type MessageItemProps = {
   onReply?: (m: Message) => void;
   inThread?: boolean;
 };
+
+function TaskChip({ task }: { task: Task }) {
+  const points = task.talkingPoints ?? [];
+  const covered = points.filter((p) => p.status === "COVERED").length;
+  // expanded by default unless DONE; user toggle overrides
+  const [override, setOverride] = useState<boolean | null>(null);
+  const open = override ?? task.status !== "DONE";
+  return (
+    <div className="mt-0.5 mb-1">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span
+          className={cn(
+            "rounded px-1.5 py-px text-[10px] font-black tracking-wide uppercase",
+            task.priority === "CRITICAL" ? "bg-[#e01e5a] text-white" : "bg-[#1264a3]/10 text-[#1264a3]",
+          )}
+        >
+          {task.priority === "CRITICAL" ? "Critical task" : "Task"}
+        </span>
+        <span className="text-[13px] font-bold text-[#1d1c1d]">{task.title}</span>
+        {points.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setOverride(!open)}
+            aria-expanded={open}
+            className="flex items-center gap-0.5 rounded px-1 text-xs text-[#616061] hover:bg-[#f0f0f0]"
+          >
+            Talking points {covered}/{points.length}
+            <ChevronDown className={cn("size-3.5 transition-transform", !open && "-rotate-90")} />
+          </button>
+        )}
+      </div>
+      {open && points.length > 0 && (
+        <TalkingPointList points={points} className="mt-1 rounded-md border border-[#e1e1e1] bg-[#fafafa] px-2 py-1.5" />
+      )}
+    </div>
+  );
+}
 
 function MessageItemInner({
   message: m,
@@ -42,7 +80,7 @@ function MessageItemInner({
 
   if (m.authorType === "SYSTEM") {
     return (
-      <div id={`msg-${m.id}`} className={cn("px-5 py-1.5", highlighted && "msg-flash")}>
+      <div id={`msg-${m.id}`} className={cn("px-3 py-1.5 md:px-5", highlighted && "msg-flash")}>
         <div className="flex gap-3 rounded-md border border-amber-300 border-l-4 border-l-[#e01e5a] bg-amber-50 px-3 py-2">
           <TriangleAlert className="mt-0.5 size-5 shrink-0 text-[#e01e5a]" />
           <div className="min-w-0 flex-1">
@@ -69,7 +107,7 @@ function MessageItemInner({
     <div
       id={`msg-${m.id}`}
       className={cn(
-        "group relative flex gap-2 px-5 hover:bg-[#f8f8f8]",
+        "group relative flex gap-2 px-3 hover:bg-[#f8f8f8] md:px-5",
         grouped ? "py-0.5" : "pt-2 pb-1",
         highlighted && "msg-flash",
         deadline?.status === "PENDING" && "bg-[#fff5f7] hover:bg-[#ffeef2]",
@@ -84,7 +122,7 @@ function MessageItemInner({
           <PersonaAvatar persona={avatarPersona} size={36} className="mt-0.5" />
         )}
       </div>
-      <div className="min-w-0 flex-1">
+      <div className={cn("min-w-0 flex-1", !inThread && onReply && !m.pending && "pointer-coarse:pr-10")}>
         {!grouped && (
           <div className="flex flex-wrap items-baseline gap-x-2">
             <span className="text-[15px] font-black text-[#1d1c1d]">{name}</span>
@@ -94,19 +132,7 @@ function MessageItemInner({
             <span className="text-xs text-[#616061]">{time}</span>
           </div>
         )}
-        {task && (
-          <div className="mt-0.5 mb-1 flex flex-wrap items-center gap-1.5">
-            <span
-              className={cn(
-                "rounded px-1.5 py-px text-[10px] font-black tracking-wide uppercase",
-                task.priority === "CRITICAL" ? "bg-[#e01e5a] text-white" : "bg-[#1264a3]/10 text-[#1264a3]",
-              )}
-            >
-              {task.priority === "CRITICAL" ? "Critical task" : "Task"}
-            </span>
-            <span className="text-[13px] font-bold text-[#1d1c1d]">{task.title}</span>
-          </div>
-        )}
+        {task && <TaskChip task={task} />}
         <div className={cn(m.pending && "opacity-60")}>
           <Markdown
             content={m.content}
@@ -146,19 +172,19 @@ function MessageItemInner({
             <span className="font-bold text-[#1264a3]">
               {replyCount} {replyCount === 1 ? "reply" : "replies"}
             </span>
-            <span className="text-xs text-[#616061]">Last reply {formatTime(replies![replies!.length - 1]!.createdAt)}</span>
+            <span className="text-xs text-[#616061] max-sm:hidden">Last reply {formatTime(replies![replies!.length - 1]!.createdAt)}</span>
           </button>
         )}
       </div>
       {!inThread && onReply && !m.pending && (
-        <div className="absolute -top-3 right-5 hidden rounded-md border border-[#ddd] bg-white shadow-sm group-hover:flex">
+        <div className="absolute -top-3 right-3 hidden rounded-md border border-[#ddd] bg-white shadow-sm group-hover:flex pointer-coarse:top-1 pointer-coarse:flex md:right-5">
           <button
             type="button"
             onClick={() => onReply(m)}
             className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-[#1d1c1d] hover:bg-[#f0f0f0]"
             title="Reply in thread"
           >
-            <MessageSquareText className="size-4" /> Reply in thread
+            <MessageSquareText className="size-4" /> <span className="pointer-coarse:hidden">Reply in thread</span>
           </button>
         </div>
       )}

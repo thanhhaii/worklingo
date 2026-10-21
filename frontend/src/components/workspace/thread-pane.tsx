@@ -47,7 +47,7 @@ export function ThreadPane({
   const task = tasks.find((t) => t.messageId === parent.id);
 
   return (
-    <aside className="flex h-full w-[380px] shrink-0 flex-col border-l border-[#e1e1e1] bg-white max-xl:absolute max-xl:inset-y-0 max-xl:right-0 max-xl:z-30 max-xl:shadow-xl">
+    <aside className="flex h-full w-[380px] shrink-0 flex-col border-l border-[#e1e1e1] bg-white max-xl:absolute max-xl:inset-y-0 max-xl:right-0 max-xl:z-30 max-xl:shadow-xl max-md:w-full max-md:border-l-0">
       <div className="flex h-12 shrink-0 items-center justify-between border-b border-[#e1e1e1] px-4">
         <div className="min-w-0">
           <div className="text-[17px] font-black text-[#1d1c1d]">Thread</div>

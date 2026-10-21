@@ -102,12 +102,12 @@ func (s *Scheduler) Run(ctx context.Context, sessionID uuid.UUID, nextAt *time.T
 }
 
 type generated struct {
-	PersonaID   string `json:"personaId"`
-	Channel     string `json:"channel"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	Priority    string `json:"priority"`
-	Message     string `json:"message"`
+	PersonaID string   `json:"personaId"`
+	Channel   string   `json:"channel"`
+	Title     string   `json:"title"`
+	Priority  string   `json:"priority"`
+	Message   string   `json:"message"`
+	Points    []string `json:"talkingPoints"`
 }
 
 func (s *Scheduler) fire(ctx context.Context, sessionID uuid.UUID) error {
@@ -128,7 +128,8 @@ func (s *Scheduler) fire(ctx context.Context, sessionID uuid.UUID) error {
 	}
 	tasks, _ := s.q.ListTasks(ctx, sessionID)
 
-	g, err := s.generate(ctx, user.Username, tasks)
+	wc := dto.ParseWorkContext(sess.WorkContext)
+	g, err := s.generate(ctx, user.Username, tasks, wc)
 	if err != nil {
 		s.log.Warn("task generation failed, using fallback", "err", err)
 		g = s.fallback(user.Username)
@@ -162,12 +163,20 @@ func (s *Scheduler) fire(ctx context.Context, sessionID uuid.UUID) error {
 	}
 	task, err := s.q.CreateTask(ctx, store.CreateTaskParams{
 		SessionID: sessionID, ChannelID: ch.ID, MessageID: msg.ID, PersonaID: g.PersonaID,
-		Title: g.Title, Description: g.Description, Priority: g.Priority,
+		Title: g.Title, Priority: g.Priority,
 	})
 	if err != nil {
 		return err
 	}
-	s.hub.Broadcast(sessionID, ws.TypeTaskNew, dto.FromTask(task))
+	var points []store.TalkingPoint
+	for i, c := range g.Points {
+		tp, err := s.q.CreateTalkingPoint(ctx, store.CreateTalkingPointParams{TaskID: task.ID, Position: int32(i), Content: c})
+		if err != nil {
+			return err
+		}
+		points = append(points, tp)
+	}
+	s.hub.Broadcast(sessionID, ws.TypeTaskNew, dto.FromTask(task, points))
 	if _, err := s.deadlines.Create(ctx, sessionID, ch.ID, msg.ID, &task.ID); err != nil {
 		return err
 	}
@@ -175,12 +184,16 @@ func (s *Scheduler) fire(ctx context.Context, sessionID uuid.UUID) error {
 	return nil
 }
 
-func (s *Scheduler) generate(ctx context.Context, username string, prev []store.Task) (generated, error) {
+func (s *Scheduler) generate(ctx context.Context, username string, prev []store.Task, wc *dto.WorkContext) (generated, error) {
 	pid := persona.Order[rand.IntN(len(persona.Order))]
 	p, _ := s.cat.Get(pid)
 	var prevTitles []string
 	for _, t := range prev {
 		prevTitles = append(prevTitles, t.Title)
+	}
+	wcText := "(none)"
+	if wc != nil {
+		wcText = wc.Describe()
 	}
 	prompt := fmt.Sprintf(`You design surprise workplace tasks for a Business English Slack simulator at a software company.
 The learner is @%s, a software engineer.
@@ -188,17 +201,20 @@ Create ONE new task from %s (@%s, %s).
 %s
 Ideas for this persona (pick one or invent a similar one): %s
 Avoid repeating previous tasks: %s
+Work context of the learner (the facts you may use; the task must be consistent with it):
+%s
 Channels: "general", "sprint-planning", "incident-room", "watercooler", or "dm" (private DM from the persona). Incidents go to "incident-room", planning to "sprint-planning".
 "message" is the Slack message the persona posts, written fully in character (1-4 sentences), it MUST @mention @%s and end with a direct question or request that needs a written reply.
 "priority" is "CRITICAL" only for urgent production issues or angry clients, otherwise "NORMAL".
+"talkingPoints" are the specific pieces of content the learner must get across in their reply: 1-2 for NORMAL, 2-3 for CRITICAL. Write them in VIETNAMESE (proper names and technical terms may stay English), short, content only - never an English sentence to copy. Each is either a fact drawn from the work context (e.g. "Đang làm feature quản lý user, xong khoảng 70%%") or a communicative act (e.g. "Xin lỗi vì trễ hạn", "Đề xuất dời buổi demo sang thứ Năm"). The persona's message must make each point answerable in a reply.
 Respond with ONLY JSON:
-{"personaId":"%s","channel":"...","title":"short task title (max 8 words)","description":"one sentence describing what the learner must do","priority":"NORMAL","message":"..."}`,
+{"personaId":"%s","channel":"...","title":"short task title (max 8 words)","priority":"NORMAL","message":"...","talkingPoints":["...","..."]}`,
 		username, p.DisplayName, p.Handle, p.Role, strings.TrimSpace(p.SystemPrompt), strings.Join(p.TaskIdeas, "; "),
-		orNone(prevTitles), username, pid)
+		orNone(prevTitles), wcText, username, pid)
 	var g generated
 	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	err := llm.CompleteJSON(cctx, s.llm, llm.Request{Model: s.model, MaxTokens: 500,
+	err := llm.CompleteJSON(cctx, s.llm, llm.Request{Model: s.model, MaxTokens: 700,
 		Messages: []llm.Message{{Role: llm.RoleUser, Content: prompt}}}, &g)
 	if err != nil {
 		return g, err
@@ -237,18 +253,36 @@ func (s *Scheduler) normalise(g generated, username string) generated {
 	if !chat.Mentions(g.Message, username) {
 		g.Message = "@" + username + " " + g.Message
 	}
-	if g.Description == "" {
-		g.Description = g.Title
-	}
+	g.Points = normalisePoints(g.Points, g.Title)
 	return g
 }
 
+// normalisePoints trims, drops empties and clamps to 1-3 (one generic point from the title if none).
+func normalisePoints(in []string, title string) []string {
+	out := make([]string, 0, 3)
+	for _, p := range in {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	if len(out) > 3 {
+		out = out[:3]
+	}
+	if len(out) == 0 {
+		out = append(out, "Trả lời yêu cầu: "+strings.TrimSpace(title))
+	}
+	return out
+}
+
 var fallbacks = []generated{
-	{PersonaID: "sarah", Channel: "sprint-planning", Title: "Estimate a new user story", Description: "Give Sarah an estimate for the new export story.", Priority: "NORMAL",
+	{PersonaID: "sarah", Channel: "sprint-planning", Title: "Estimate a new user story", Priority: "NORMAL",
+		Points:  []string{"Ước tính khoảng 5 story points cho tính năng xuất CSV", "Nói rằng cần thêm thời gian để kiểm tra truy vấn báo cáo vì dữ liệu lớn"},
 		Message: "Stakeholders just asked for a CSV export on the reports page. @{{u}} can you give me a rough estimate in story points before standup?"},
-	{PersonaID: "alex", Channel: "incident-room", Title: "Explain the 500 errors", Description: "Tell Alex what you know about the spike of 500 errors on the API.", Priority: "CRITICAL",
+	{PersonaID: "alex", Channel: "incident-room", Title: "Explain the 500 errors", Priority: "CRITICAL",
+		Points:  []string{"Hôm qua bạn có sửa handler đó nhưng chưa rõ nó có phải nguyên nhân không", "Bạn sẽ kiểm tra log ngay bây giờ", "Đề xuất rollback nếu lỗi vẫn tiếp diễn"},
 		Message: ":rotating_light: We're seeing a spike of 500s on `/api/orders`. @{{u}} you touched that handler yesterday — what changed, and can you check the logs?"},
-	{PersonaID: "david", Channel: "dm", Title: "Clarify the client's request", Description: "Ask David clarifying questions about his new homepage idea.", Priority: "NORMAL",
+	{PersonaID: "david", Channel: "dm", Title: "Clarify the client's request", Priority: "NORMAL",
+		Points:  []string{"Hỏi lại David \"premium\" nghĩa là gì cụ thể (giao diện, tốc độ, hay nội dung)", "Nói rằng bạn sẽ gửi ước lượng sau khi hiểu rõ yêu cầu"},
 		Message: "Hello! Had a brilliant chat with our marketing lot — we'd like the homepage to feel a bit more 'premium'. @{{u}} could you let me know what that would involve, ballpark?"},
 }
 

@@ -104,8 +104,9 @@ func (c *Catalog) ByMention(token string) (string, bool) {
 	return "", false
 }
 
-// SystemPrompt builds the full system prompt for persona p.
-func (c *Catalog) SystemPrompt(p Persona, username, channelLabel string) string {
+// SystemPrompt builds the full system prompt for persona p. A non-nil work
+// context is appended as a shared-facts block so all personas stay consistent.
+func (c *Catalog) SystemPrompt(p Persona, username, channelLabel string, wc *dto.WorkContext) string {
 	var others []string
 	for _, o := range c.All() {
 		if o.ID != p.ID {
@@ -114,7 +115,11 @@ func (c *Catalog) SystemPrompt(p Persona, username, channelLabel string) string 
 	}
 	sort.Strings(others)
 	r := strings.NewReplacer("{{username}}", username, "{{channel}}", channelLabel, "{{others}}", strings.Join(others, ", "))
-	return strings.TrimSpace(p.SystemPrompt) + "\n\n" + r.Replace(c.rules)
+	out := strings.TrimSpace(p.SystemPrompt) + "\n\n" + r.Replace(c.rules)
+	if wc != nil {
+		out += "\n\nShared work context (the learner's current work; stay consistent with it, never contradict it; the facts are written in Vietnamese but you always reply in English):\n" + wc.Describe()
+	}
+	return out
 }
 
 // Render replaces {{username}} in a template.

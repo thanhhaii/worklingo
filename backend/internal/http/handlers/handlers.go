@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -25,6 +24,7 @@ import (
 	"github.com/worklingo/backend/internal/persona"
 	"github.com/worklingo/backend/internal/session"
 	"github.com/worklingo/backend/internal/store"
+	"github.com/worklingo/backend/internal/task"
 )
 
 type Handlers struct {
@@ -34,6 +34,7 @@ type Handlers struct {
 	Chat      *chat.Service
 	Engine    *persona.Engine
 	Deadlines *deadline.Service
+	Tasks     *task.Service
 	Registry  *lifecycle.Registry
 	Log       *slog.Logger
 }
@@ -232,14 +233,15 @@ func (h *Handlers) GetSession(w http.ResponseWriter, r *http.Request) {
 	ts, err2 := h.Q.ListTasks(ctx, s.ID)
 	ds, err3 := h.Q.ListDeadlines(ctx, s.ID)
 	ws, err4 := h.Q.ListWarnings(ctx, s.ID)
-	if err := errors.Join(err1, err2, err3, err4); err != nil {
+	tps, err5 := h.Q.ListTalkingPointsForSession(ctx, s.ID)
+	if err := errors.Join(err1, err2, err3, err4, err5); err != nil {
 		h.internal(w, err)
 		return
 	}
 	JSON(w, http.StatusOK, dto.SessionDetail{
 		Session:   dto.FromSession(s),
 		Channels:  dto.Map(chs, dto.FromChannel),
-		Tasks:     dto.Map(ts, dto.FromTask),
+		Tasks:     dto.FromTasks(ts, tps),
 		Deadlines: dto.Map(ds, dto.FromDeadline),
 		Warnings:  dto.Map(ws, dto.FromWarning),
 	})
@@ -391,9 +393,6 @@ func (h *Handlers) PostMessage(w http.ResponseWriter, r *http.Request) {
 		h.internal(w, err)
 		return
 	}
-	if sctx, ok := h.Registry.Get(s.ID); ok {
-		h.Deadlines.OnUserMessage(context.WithoutCancel(r.Context()), m)
-		go h.Engine.OnUserMessage(sctx, ch, u, m)
-	}
+	h.Tasks.OnUserMessage(ch, u, m)
 	JSON(w, http.StatusCreated, dto.FromMessage(m))
 }

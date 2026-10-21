@@ -3,8 +3,14 @@
 package dto
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"sort"
+	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/worklingo/backend/internal/store"
 )
@@ -32,6 +38,44 @@ type Session struct {
 	ExpiresAt time.Time  `json:"expiresAt"`
 	EndedAt   *time.Time `json:"endedAt"`
 	Warnings  int        `json:"warnings"`
+
+	WorkContext *WorkContext `json:"workContext"`
+}
+
+// WorkContext is the fictional project situation of a session (stored as JSONB, exposed as-is).
+type WorkContext struct {
+	Project        string   `json:"project"`
+	ProjectSummary string   `json:"projectSummary"`
+	Feature        string   `json:"feature"`
+	Progress       string   `json:"progress"`
+	Blocker        string   `json:"blocker"`
+	Notes          []string `json:"notes"`
+}
+
+// Describe renders the work context as plain text for LLM prompts.
+func (w WorkContext) Describe() string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "- Project: %s (%s)\n- Feature the learner is building: %s\n- Progress: %s\n- Blocker: %s\n",
+		w.Project, w.ProjectSummary, w.Feature, w.Progress, w.Blocker)
+	for _, n := range w.Notes {
+		fmt.Fprintf(&sb, "- %s\n", n)
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+// ParseWorkContext decodes the sessions.work_context column (nil if absent or invalid).
+func ParseWorkContext(raw []byte) *WorkContext {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var w WorkContext
+	if err := json.Unmarshal(raw, &w); err != nil {
+		return nil
+	}
+	if w.Notes == nil {
+		w.Notes = []string{}
+	}
+	return &w
 }
 
 type Channel struct {
@@ -56,16 +100,25 @@ type Message struct {
 }
 
 type Task struct {
-	ID          string    `json:"id"`
-	SessionID   string    `json:"sessionId"`
-	ChannelID   string    `json:"channelId"`
-	MessageID   string    `json:"messageId"`
-	PersonaID   string    `json:"personaId"`
-	Title       string    `json:"title"`
-	Description string    `json:"description"`
-	Priority    string    `json:"priority"`
-	Status      string    `json:"status"`
-	CreatedAt   time.Time `json:"createdAt"`
+	ID        string    `json:"id"`
+	SessionID string    `json:"sessionId"`
+	ChannelID string    `json:"channelId"`
+	MessageID string    `json:"messageId"`
+	PersonaID string    `json:"personaId"`
+	Title     string    `json:"title"`
+	Priority  string    `json:"priority"`
+	Status    string    `json:"status"`
+	CreatedAt time.Time `json:"createdAt"`
+
+	TalkingPoints []TalkingPoint `json:"talkingPoints"`
+}
+
+type TalkingPoint struct {
+	ID       string `json:"id"`
+	Position int    `json:"position"`
+	Content  string `json:"content"`
+	Status   string `json:"status"`
+	Reason   string `json:"reason"`
 }
 
 type Deadline struct {
@@ -88,24 +141,51 @@ type Warning struct {
 	CreatedAt  time.Time `json:"createdAt"`
 }
 
-type Correction struct {
+type MessageIssue struct {
 	Original    string `json:"original"`
 	Corrected   string `json:"corrected"`
 	Explanation string `json:"explanation"`
 	Category    string `json:"category"`
+	Severity    string `json:"severity"`
+}
+
+type MessageReview struct {
+	MessageID    string         `json:"messageId"`
+	ChannelLabel string         `json:"channelLabel"`
+	Content      string         `json:"content"`
+	CreatedAt    time.Time      `json:"createdAt"`
+	Issues       []MessageIssue `json:"issues"`
+}
+
+type TalkingPointReview struct {
+	TalkingPointID string `json:"talkingPointId"`
+	Content        string `json:"content"`
+	Covered        bool   `json:"covered"`
+	LearnerQuote   string `json:"learnerQuote"`
+	Reason         string `json:"reason"`
+	Sample         string `json:"sample"`
+}
+
+type TaskReview struct {
+	TaskID        string               `json:"taskId"`
+	Title         string               `json:"title"`
+	PersonaID     string               `json:"personaId"`
+	Status        string               `json:"status"`
+	TalkingPoints []TalkingPointReview `json:"talkingPoints"`
 }
 
 type Evaluation struct {
-	ID          string       `json:"id"`
-	SessionID   string       `json:"sessionId"`
-	Status      string       `json:"status"`
-	Grammar     int          `json:"grammar"`
-	Tone        int          `json:"tone"`
-	Vocabulary  int          `json:"vocabulary"`
-	Overall     int          `json:"overall"`
-	Summary     string       `json:"summary"`
-	Corrections []Correction `json:"corrections"`
-	CreatedAt   time.Time    `json:"createdAt"`
+	ID             string          `json:"id"`
+	SessionID      string          `json:"sessionId"`
+	Status         string          `json:"status"`
+	Grammar        int             `json:"grammar"`
+	Tone           int             `json:"tone"`
+	Vocabulary     int             `json:"vocabulary"`
+	Overall        int             `json:"overall"`
+	Summary        string          `json:"summary"`
+	CreatedAt      time.Time       `json:"createdAt"`
+	MessageReviews []MessageReview `json:"messageReviews"`
+	TaskReviews    []TaskReview    `json:"taskReviews"`
 }
 
 type SessionDetail struct {
@@ -134,7 +214,7 @@ func FromSession(s store.Session) Session {
 	return Session{
 		ID: s.ID.String(), Mode: s.Mode, Status: s.Status,
 		StartedAt: utc(s.StartedAt), ExpiresAt: utc(s.ExpiresAt), EndedAt: utcPtr(s.EndedAt),
-		Warnings: int(s.Warnings),
+		Warnings: int(s.Warnings), WorkContext: ParseWorkContext(s.WorkContext),
 	}
 }
 
@@ -165,12 +245,37 @@ func FromMessageStreaming(m store.Message, streaming bool) Message {
 	return out
 }
 
-func FromTask(t store.Task) Task {
+// FromTask converts a task with its talking points (any order; sorted by position).
+func FromTask(t store.Task, points []store.TalkingPoint) Task {
+	tps := make([]TalkingPoint, 0, len(points))
+	for _, p := range points {
+		tps = append(tps, TalkingPoint{ID: p.ID.String(), Position: int(p.Position), Content: p.Content, Status: p.Status, Reason: p.Reason})
+	}
+	sort.SliceStable(tps, func(i, j int) bool { return tps[i].Position < tps[j].Position })
 	return Task{
 		ID: t.ID.String(), SessionID: t.SessionID.String(), ChannelID: t.ChannelID.String(),
-		MessageID: t.MessageID.String(), PersonaID: t.PersonaID, Title: t.Title, Description: t.Description,
-		Priority: t.Priority, Status: t.Status, CreatedAt: utc(t.CreatedAt),
+		MessageID: t.MessageID.String(), PersonaID: t.PersonaID, Title: t.Title,
+		Priority: t.Priority, Status: t.Status, CreatedAt: utc(t.CreatedAt), TalkingPoints: tps,
 	}
+}
+
+// LoadTask converts a task, loading its talking points from the database.
+func LoadTask(ctx context.Context, q *store.Queries, t store.Task) Task {
+	pts, _ := q.ListTalkingPointsForTask(ctx, t.ID)
+	return FromTask(t, pts)
+}
+
+// FromTasks converts a session's tasks, grouping the session's talking points.
+func FromTasks(ts []store.Task, points []store.TalkingPoint) []Task {
+	by := map[uuid.UUID][]store.TalkingPoint{}
+	for _, p := range points {
+		by[p.TaskID] = append(by[p.TaskID], p)
+	}
+	out := make([]Task, 0, len(ts))
+	for _, t := range ts {
+		out = append(out, FromTask(t, by[t.ID]))
+	}
+	return out
 }
 
 func FromDeadline(d store.Deadline) Deadline {
@@ -194,12 +299,28 @@ func FromEvaluation(e store.Evaluation) Evaluation {
 	out := Evaluation{
 		ID: e.ID.String(), SessionID: e.SessionID.String(), Status: e.Status,
 		Grammar: int(e.Grammar), Tone: int(e.Tone), Vocabulary: int(e.Vocabulary), Overall: int(e.Overall),
-		Summary: e.Summary, CreatedAt: utc(e.CreatedAt), Corrections: []Correction{},
+		Summary: e.Summary, CreatedAt: utc(e.CreatedAt), MessageReviews: []MessageReview{}, TaskReviews: []TaskReview{},
 	}
-	if len(e.Corrections) > 0 {
-		_ = json.Unmarshal(e.Corrections, &out.Corrections)
-		if out.Corrections == nil {
-			out.Corrections = []Correction{}
+	if len(e.MessageReviews) > 0 {
+		_ = json.Unmarshal(e.MessageReviews, &out.MessageReviews)
+	}
+	if len(e.TaskReviews) > 0 {
+		_ = json.Unmarshal(e.TaskReviews, &out.TaskReviews)
+	}
+	if out.MessageReviews == nil {
+		out.MessageReviews = []MessageReview{}
+	}
+	for i := range out.MessageReviews {
+		if out.MessageReviews[i].Issues == nil {
+			out.MessageReviews[i].Issues = []MessageIssue{}
+		}
+	}
+	if out.TaskReviews == nil {
+		out.TaskReviews = []TaskReview{}
+	}
+	for i := range out.TaskReviews {
+		if out.TaskReviews[i].TalkingPoints == nil {
+			out.TaskReviews[i].TalkingPoints = []TalkingPointReview{}
 		}
 	}
 	return out

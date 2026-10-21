@@ -170,16 +170,15 @@ func (s *Service) expire(id uuid.UUID) {
 	s.log.Info("deadline expired", "deadline", d.ID, "session", d.SessionID, "warnings", sess.Warnings)
 }
 
-// OnUserMessage snapshots pending deadlines in the message's channel and
-// validates the reply against each in the background. A reply resolves a
-// deadline if it is in the same channel (top-level or in the thread of the
-// requesting message) and the validator accepts it.
-func (s *Service) OnUserMessage(ctx context.Context, m store.Message) {
+// candidates returns the pending deadlines a user message may resolve. A reply
+// resolves a deadline if it is in the same channel (top-level or in the thread
+// of the requesting message).
+func (s *Service) candidates(ctx context.Context, m store.Message) []store.Deadline {
 	pending, err := s.q.ListPendingDeadlinesForChannel(ctx, m.ChannelID)
 	if err != nil || len(pending) == 0 {
-		return
+		return nil
 	}
-	var candidates []store.Deadline
+	var out []store.Deadline
 	for _, d := range pending {
 		if d.CreatedAt.After(m.CreatedAt) {
 			continue
@@ -192,8 +191,15 @@ func (s *Service) OnUserMessage(ctx context.Context, m store.Message) {
 				continue // request lives in a different thread
 			}
 		}
-		candidates = append(candidates, d)
+		out = append(out, d)
 	}
+	return out
+}
+
+// OnUserMessage snapshots pending deadlines in the message's channel and
+// validates the reply against each in the background.
+func (s *Service) OnUserMessage(ctx context.Context, m store.Message) {
+	candidates := s.candidates(ctx, m)
 	if len(candidates) == 0 {
 		return
 	}
@@ -202,6 +208,14 @@ func (s *Service) OnUserMessage(ctx context.Context, m store.Message) {
 		return
 	}
 	go s.validateAndResolve(sctx, m, candidates)
+}
+
+// ValidateReply is the synchronous variant of OnUserMessage: it validates the
+// reply against the pending deadlines and returns when done.
+func (s *Service) ValidateReply(ctx context.Context, m store.Message) {
+	if candidates := s.candidates(ctx, m); len(candidates) > 0 {
+		s.validateAndResolve(ctx, m, candidates)
+	}
 }
 
 func (s *Service) validateAndResolve(ctx context.Context, m store.Message, candidates []store.Deadline) {
@@ -240,9 +254,9 @@ func (s *Service) resolve(ctx context.Context, id uuid.UUID) bool {
 	s.unschedule(id)
 	s.hub.Broadcast(d.SessionID, ws.TypeDeadlineUpdated, dto.FromDeadline(d))
 	if d.TaskID != nil {
-		t, err := s.q.SetTaskStatus(ctx, store.SetTaskStatusParams{ID: *d.TaskID, Status: "ACKNOWLEDGED"})
-		if err == nil {
-			s.hub.Broadcast(d.SessionID, ws.TypeTaskUpdated, dto.FromTask(t))
+		// Only OPEN -> ACKNOWLEDGED; never downgrades a DONE task (no row = no change).
+		if t, err := s.q.AcknowledgeTask(ctx, *d.TaskID); err == nil {
+			s.hub.Broadcast(d.SessionID, ws.TypeTaskUpdated, dto.LoadTask(ctx, s.q, t))
 		}
 	}
 	s.log.Info("deadline resolved", "deadline", d.ID)

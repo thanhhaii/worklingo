@@ -41,18 +41,19 @@
 <body>
 <header>
   <h1>WorkLingo — Kiến trúc hệ thống</h1>
-  <p>AI-Solo MVP · Go backend · Next.js frontend · PostgreSQL · LLM qua 9router</p>
+  <p>AI-Solo MVP · Go backend · Next.js frontend · PostgreSQL · LLM qua Beeknoee</p>
 </header>
 <nav>
   <a href="#overview">1. Tổng quan</a>
-  <a href="#backend">2. Backend packages</a>
-  <a href="#flow">3. Luồng chat &amp; stream</a>
-  <a href="#deadline">4. Deadline 5 phút</a>
-  <a href="#lifecycle">5. Vòng đời session</a>
-  <a href="#db">6. Database</a>
-  <a href="#frontend">7. Frontend</a>
-  <a href="#contract">8. API / WS</a>
-  <a href="#config">9. Cấu hình</a>
+  <a href="#system">2. System architecture</a>
+  <a href="#backend">3. Backend packages</a>
+  <a href="#flow">4. Luồng chat &amp; stream</a>
+  <a href="#deadline">5. Deadline 5 phút</a>
+  <a href="#lifecycle">6. Vòng đời session</a>
+  <a href="#db">7. Database</a>
+  <a href="#frontend">8. Frontend</a>
+  <a href="#contract">9. API / WS</a>
+  <a href="#config">10. Cấu hình</a>
 </nav>
 <main>
 
@@ -99,11 +100,11 @@
     <text x="985" y="262" text-anchor="middle" font-size="13" fill="#616061">docker · host :5433</text>
     <text x="985" y="282" text-anchor="middle" font-size="12" fill="#616061">pgx + sqlc · goose</text>
 
-    <!-- 9router -->
+    <!-- LLM gateway -->
     <rect x="880" y="340" width="210" height="110" rx="10" fill="#fce8ee" stroke="var(--ai)" stroke-width="1.5"/>
-    <text x="985" y="370" text-anchor="middle" font-weight="700" fill="var(--ai)">9router :20128</text>
+    <text x="985" y="370" text-anchor="middle" font-weight="700" fill="var(--ai)">Beeknoee (HTTPS)</text>
     <text x="985" y="392" text-anchor="middle" font-size="13" fill="#616061">/v1/chat/completions (SSE)</text>
-    <text x="985" y="412" text-anchor="middle" font-size="12" fill="#616061">Haiku 4.5 → chat/validate/task</text>
+    <text x="985" y="412" text-anchor="middle" font-size="12" fill="#616061">Haiku 5.5 → chat/validate/task</text>
     <text x="985" y="430" text-anchor="middle" font-size="12" fill="#616061">Sonnet 5.5 → evaluation</text>
 
     <!-- arrows -->
@@ -123,9 +124,200 @@
   </div>
 </section>
 
-<!-- 2. BACKEND -->
+<!-- 2. SYSTEM ARCHITECTURE -->
+<section id="system">
+  <h2>2. System architecture <small>(hiện tại · các lớp &amp; runtime bên trong Go API)</small></h2>
+  <p class="lead">Toàn bộ backend là <b>một process Go</b> (modular monolith). Request đi qua chuỗi middleware → handler/Hub → domain service → engine → adapter. Mọi goroutine nền của một phiên treo dưới <code>sessionCtx</code> do <code>lifecycle.Registry</code> cấp, nên kết thúc phiên = huỷ một context.</p>
+  <svg viewBox="0 0 1120 660" role="img" aria-label="System architecture">
+    <defs>
+      <marker id="sa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#555"/></marker>
+    </defs>
+    <g font-size="12.5">
+      <!-- client -->
+      <text x="20" y="22" font-weight="700" fill="#616061">CLIENT</text>
+      <rect x="20" y="32" width="200" height="300" rx="10" fill="#e8f1f9" stroke="var(--fe)" stroke-width="1.5"/>
+      <text x="120" y="56" text-anchor="middle" font-weight="700" fill="var(--fe)">Browser (Next.js app)</text>
+      <rect x="34" y="70" width="172" height="40" rx="6" fill="#fff" stroke="var(--fe)"/>
+      <text x="120" y="88" text-anchor="middle" font-weight="600">Pages</text><text x="120" y="103" text-anchor="middle" fill="#616061" font-size="11">login · dashboard · workspace · report</text>
+      <rect x="34" y="120" width="172" height="40" rx="6" fill="#fff" stroke="var(--fe)"/>
+      <text x="120" y="138" text-anchor="middle" font-weight="600">use-session-controller</text><text x="120" y="153" text-anchor="middle" fill="#616061" font-size="11">event → store</text>
+      <rect x="34" y="170" width="172" height="40" rx="6" fill="#fff" stroke="var(--fe)"/>
+      <text x="120" y="188" text-anchor="middle" font-weight="600">zustand store</text><text x="120" y="203" text-anchor="middle" fill="#616061" font-size="11">auth (JWT localStorage) · workspace</text>
+      <rect x="34" y="220" width="82" height="48" rx="6" fill="#fff" stroke="var(--fe)"/>
+      <text x="75" y="240" text-anchor="middle" font-weight="600">api.ts</text><text x="75" y="256" text-anchor="middle" fill="#616061" font-size="11">fetch+Bearer</text>
+      <rect x="124" y="220" width="82" height="48" rx="6" fill="#fff" stroke="var(--fe)"/>
+      <text x="165" y="240" text-anchor="middle" font-weight="600">ws.ts</text><text x="165" y="256" text-anchor="middle" fill="#616061" font-size="11">reconnect·ping</text>
+      <text x="120" y="292" text-anchor="middle" fill="#616061" font-size="11">REST: tải ban đầu, gửi tin</text>
+      <text x="120" y="308" text-anchor="middle" fill="#616061" font-size="11">WS: mọi cập nhật realtime</text>
+
+      <!-- edge -->
+      <text x="250" y="22" font-weight="700" fill="#616061">EDGE (dev)</text>
+      <rect x="250" y="120" width="150" height="110" rx="10" fill="#f0f0f3" stroke="var(--proxy)" stroke-width="1.5"/>
+      <text x="325" y="146" text-anchor="middle" font-weight="700">dev-proxy :5323</text>
+      <text x="325" y="168" text-anchor="middle" fill="#616061" font-size="11">/api, /ws → Go :8080</text>
+      <text x="325" y="184" text-anchor="middle" fill="#616061" font-size="11">còn lại → Next :3000</text>
+      <text x="325" y="206" text-anchor="middle" fill="#616061" font-size="11">WS: TCP pass-through</text>
+      <rect x="250" y="300" width="150" height="80" rx="10" fill="#e8f1f9" stroke="var(--fe)" stroke-width="1.5"/>
+      <text x="325" y="326" text-anchor="middle" font-weight="700" fill="var(--fe)">Next.js :3000</text>
+      <text x="325" y="346" text-anchor="middle" fill="#616061" font-size="11">serve pages / JS</text>
+      <text x="325" y="362" text-anchor="middle" fill="#616061" font-size="11">(+ HMR WS)</text>
+      <rect x="250" y="430" width="150" height="104" rx="10" fill="#fff" stroke="#999" stroke-dasharray="4 3"/>
+      <text x="325" y="454" text-anchor="middle" font-weight="700">scripts/start.sh</text>
+      <text x="325" y="474" text-anchor="middle" fill="#616061" font-size="11">1. Postgres (docker)</text>
+      <text x="325" y="490" text-anchor="middle" fill="#616061" font-size="11">2. Go API (/api/health)</text>
+      <text x="325" y="506" text-anchor="middle" fill="#616061" font-size="11">3. Next.js</text>
+      <text x="325" y="522" text-anchor="middle" fill="#616061" font-size="11">4. proxy</text>
+
+      <!-- Go container -->
+      <text x="430" y="22" font-weight="700" fill="#1a7f53">GO API :8080 — một process (backend/cmd/api)</text>
+      <rect x="430" y="32" width="470" height="616" rx="12" fill="#f6fbf8" stroke="var(--be)" stroke-width="1.8"/>
+
+      <!-- middleware -->
+      <rect x="446" y="46" width="438" height="44" rx="6" fill="#e9f7f0" stroke="var(--be)"/>
+      <text x="665" y="64" text-anchor="middle" font-weight="700">chi middleware</text>
+      <text x="665" y="81" text-anchor="middle" fill="#616061" font-size="11">RequestID → RealIP → logging → recoverer → CORS → requireAuth (JWT)</text>
+
+      <!-- transport -->
+      <rect x="446" y="104" width="212" height="58" rx="6" fill="#e9f7f0" stroke="var(--be)"/>
+      <text x="552" y="126" text-anchor="middle" font-weight="700">REST handlers</text>
+      <text x="552" y="144" text-anchor="middle" fill="#616061" font-size="11">auth · sessions · messages · eval</text>
+      <rect x="672" y="104" width="212" height="58" rx="6" fill="#e9f7f0" stroke="var(--be)"/>
+      <text x="778" y="126" text-anchor="middle" font-weight="700">ws.Hub  (/ws?token=)</text>
+      <text x="778" y="144" text-anchor="middle" fill="#616061" font-size="11">subscribe theo session · Broadcast</text>
+
+      <!-- domain -->
+      <text x="446" y="186" font-size="11" font-weight="700" fill="#616061">DOMAIN</text>
+      <rect x="446" y="192" width="140" height="56" rx="6" fill="#fff" stroke="#333"/>
+      <text x="516" y="214" text-anchor="middle" font-weight="700">session.Manager</text>
+      <text x="516" y="232" text-anchor="middle" fill="#616061" font-size="11">start · end · expire</text>
+      <rect x="595" y="192" width="140" height="56" rx="6" fill="#fff" stroke="#333"/>
+      <text x="665" y="214" text-anchor="middle" font-weight="700">chat.Service</text>
+      <text x="665" y="232" text-anchor="middle" fill="#616061" font-size="11">persist + broadcast</text>
+      <rect x="744" y="192" width="140" height="56" rx="6" fill="#fff" stroke="#333"/>
+      <text x="814" y="214" text-anchor="middle" font-weight="700">deadline.Service</text>
+      <text x="814" y="232" text-anchor="middle" fill="#616061" font-size="11">timer 5' · warning</text>
+
+      <!-- engines -->
+      <text x="446" y="272" font-size="11" font-weight="700" fill="#616061">ENGINES (gọi LLM)</text>
+      <rect x="446" y="278" width="104" height="56" rx="6" fill="#fce8ee" stroke="var(--ai)"/>
+      <text x="498" y="300" text-anchor="middle" font-weight="700">persona</text>
+      <text x="498" y="318" text-anchor="middle" fill="#616061" font-size="11">reply stream</text>
+      <rect x="557" y="278" width="104" height="56" rx="6" fill="#fce8ee" stroke="var(--ai)"/>
+      <text x="609" y="300" text-anchor="middle" font-weight="700">scenario</text>
+      <text x="609" y="318" text-anchor="middle" fill="#616061" font-size="11">task bất ngờ</text>
+      <rect x="668" y="278" width="104" height="56" rx="6" fill="#fce8ee" stroke="var(--ai)"/>
+      <text x="720" y="300" text-anchor="middle" font-weight="700">validator</text>
+      <text x="720" y="318" text-anchor="middle" fill="#616061" font-size="11">heuristic+LLM</text>
+      <rect x="779" y="278" width="105" height="56" rx="6" fill="#fce8ee" stroke="var(--ai)"/>
+      <text x="831" y="300" text-anchor="middle" font-weight="700">evaluation</text>
+      <text x="831" y="318" text-anchor="middle" fill="#616061" font-size="11">chấm điểm</text>
+
+      <!-- runtime -->
+      <text x="446" y="358" font-size="11" font-weight="700" fill="#616061">RUNTIME / CONCURRENCY</text>
+      <rect x="446" y="364" width="438" height="106" rx="6" fill="#f5eef5" stroke="var(--aub)"/>
+      <text x="665" y="384" text-anchor="middle" font-weight="700">lifecycle.Registry: appCtx → sessionCtx (1 / session)</text>
+      <rect x="458" y="394" width="98" height="64" rx="5" fill="#fff" stroke="var(--aub)"/>
+      <text x="507" y="414" text-anchor="middle" font-weight="600" font-size="11.5">session timer</text><text x="507" y="430" text-anchor="middle" fill="#616061" font-size="10.5">hết 60' → End</text><text x="507" y="446" text-anchor="middle" fill="#616061" font-size="10.5">AfterFunc</text>
+      <rect x="563" y="394" width="98" height="64" rx="5" fill="#fff" stroke="var(--aub)"/>
+      <text x="612" y="414" text-anchor="middle" font-weight="600" font-size="11.5">task loop</text><text x="612" y="430" text-anchor="middle" fill="#616061" font-size="10.5">next_task_at</text><text x="612" y="446" text-anchor="middle" fill="#616061" font-size="10.5">6–12'</text>
+      <rect x="668" y="394" width="98" height="64" rx="5" fill="#fff" stroke="var(--aub)"/>
+      <text x="717" y="414" text-anchor="middle" font-weight="600" font-size="11.5">deadline timers</text><text x="717" y="430" text-anchor="middle" fill="#616061" font-size="10.5">AfterFunc / id</text><text x="717" y="446" text-anchor="middle" fill="#616061" font-size="10.5">DB = nguồn thật</text>
+      <rect x="773" y="394" width="98" height="64" rx="5" fill="#fff" stroke="var(--aub)"/>
+      <text x="822" y="414" text-anchor="middle" font-weight="600" font-size="11.5">persona stream</text><text x="822" y="430" text-anchor="middle" fill="#616061" font-size="10.5">goroutine / reply</text><text x="822" y="446" text-anchor="middle" fill="#616061" font-size="10.5">huỷ theo ctx</text>
+
+      <!-- adapters -->
+      <text x="446" y="494" font-size="11" font-weight="700" fill="#616061">ADAPTERS / INFRA</text>
+      <rect x="446" y="500" width="140" height="62" rx="6" fill="#fdf2e6" stroke="var(--db)"/>
+      <text x="516" y="522" text-anchor="middle" font-weight="700">store (sqlc)</text>
+      <text x="516" y="538" text-anchor="middle" fill="#616061" font-size="11">pgxpool · goose</text>
+      <text x="516" y="552" text-anchor="middle" fill="#616061" font-size="11">migrate khi boot</text>
+      <rect x="595" y="500" width="140" height="62" rx="6" fill="#fdf2e6" stroke="var(--db)"/>
+      <text x="665" y="522" text-anchor="middle" font-weight="700">llm.Provider</text>
+      <text x="665" y="538" text-anchor="middle" fill="#616061" font-size="11">OpenAICompat</text>
+      <text x="665" y="552" text-anchor="middle" fill="#616061" font-size="11">Complete · Stream</text>
+      <rect x="744" y="500" width="140" height="62" rx="6" fill="#fdf2e6" stroke="var(--db)"/>
+      <text x="814" y="522" text-anchor="middle" font-weight="700">persona.Catalog</text>
+      <text x="814" y="538" text-anchor="middle" fill="#616061" font-size="11">prompts go:embed</text>
+      <text x="814" y="552" text-anchor="middle" fill="#616061" font-size="11">sarah·alex·david</text>
+
+      <!-- cross-cutting -->
+      <rect x="446" y="578" width="438" height="56" rx="6" fill="#fff" stroke="#bbb" stroke-dasharray="4 3"/>
+      <text x="665" y="600" text-anchor="middle" font-weight="700">Cross-cutting</text>
+      <text x="665" y="618" text-anchor="middle" fill="#616061" font-size="11">config (env + .env) · auth (JWT 168h, bcrypt) · slog JSON · graceful shutdown (SIGTERM)</text>
+
+      <!-- data / external -->
+      <text x="930" y="22" font-weight="700" fill="#616061">DATA / EXTERNAL</text>
+      <rect x="930" y="250" width="170" height="110" rx="10" fill="#fce8ee" stroke="var(--ai)" stroke-width="1.5"/>
+      <text x="1015" y="276" text-anchor="middle" font-weight="700" fill="var(--ai)">Beeknoee</text>
+      <text x="1015" y="296" text-anchor="middle" fill="#616061" font-size="11">platform.beeknoee.com</text>
+      <text x="1015" y="314" text-anchor="middle" fill="#616061" font-size="11">OpenAI-compatible · SSE</text>
+      <text x="1015" y="332" text-anchor="middle" fill="#616061" font-size="11">haiku-5-5 · sonnet-5.5</text>
+      <text x="1015" y="348" text-anchor="middle" fill="#999" font-size="10.5">(dự phòng: 9router :20128)</text>
+      <rect x="930" y="480" width="170" height="100" rx="10" fill="#fdf2e6" stroke="var(--db)" stroke-width="1.5"/>
+      <text x="1015" y="506" text-anchor="middle" font-weight="700" fill="#b86a14">PostgreSQL 17</text>
+      <text x="1015" y="526" text-anchor="middle" fill="#616061" font-size="11">docker worklingo-db</text>
+      <text x="1015" y="544" text-anchor="middle" fill="#616061" font-size="11">host :5433 · volume pgdata</text>
+      <text x="1015" y="562" text-anchor="middle" fill="#616061" font-size="11">8 bảng</text>
+    </g>
+
+    <!-- arrows -->
+    <g stroke="#555" stroke-width="1.5" fill="none">
+      <line x1="220" y1="175" x2="248" y2="175" marker-end="url(#sa)" marker-start="url(#sa)"/>
+      <line x1="325" y1="230" x2="325" y2="298" marker-end="url(#sa)" stroke="var(--fe)"/>
+      <path d="M400 150 C 420 150, 420 68, 444 68" marker-end="url(#sa)" stroke="var(--be)"/>
+      <path d="M400 200 C 420 200, 420 175, 600 175 L 776 175 L 776 164" marker-end="url(#sa)" stroke="var(--be)" stroke-dasharray="5 3"/>
+      <line x1="552" y1="90" x2="552" y2="102" marker-end="url(#sa)" stroke="var(--be)"/>
+      <line x1="552" y1="162" x2="552" y2="190" marker-end="url(#sa)" stroke="#888"/>
+      <line x1="665" y1="248" x2="665" y2="276" marker-end="url(#sa)" stroke="#888"/>
+      <line x1="814" y1="248" x2="814" y2="276" marker-end="url(#sa)" stroke="#888"/>
+      <line x1="516" y1="248" x2="516" y2="276" marker-end="url(#sa)" stroke="#888"/>
+      <line x1="665" y1="470" x2="665" y2="498" marker-end="url(#sa)" stroke="#888"/>
+      <line x1="884" y1="531" x2="928" y2="531" marker-end="url(#sa)" stroke="var(--db)"/>
+      <path d="M665 562 L 665 570 L 915 570 L 915 315 L 928 315" marker-end="url(#sa)" stroke="var(--ai)"/>
+    </g>
+    <text x="408" y="62" font-size="11" fill="#1a7f53">/api</text>
+    <text x="606" y="170" font-size="11" fill="#1a7f53">/ws upgrade</text>
+    <text x="922" y="420" font-size="11" fill="var(--ai)">HTTPS/SSE</text>
+    <text x="906" y="524" font-size="11" fill="#b86a14" text-anchor="middle">SQL</text>
+  </svg>
+  <div class="legend">
+    <span style="--c:var(--fe)">Frontend</span><span style="--c:var(--be)">Transport (Go)</span><span style="--c:var(--ai)">LLM engines / gateway</span>
+    <span style="--c:var(--aub)">Runtime goroutines</span><span style="--c:var(--db)">Adapters / DB</span><span style="--c:var(--proxy)">Dev proxy</span>
+  </div>
+
+  <div class="grid2" style="margin-top:18px">
+    <table>
+      <tr><th>Quyết định kiến trúc</th><th>Lý do</th></tr>
+      <tr><td>Modular monolith, 1 process Go</td><td>Dùng cá nhân; timer &amp; Hub trong bộ nhớ, không cần queue/Redis.</td></tr>
+      <tr><td>Một cổng <code>:5323</code> qua proxy</td><td>Cùng origin cho REST + WS, không vướng CORS/cookie; FE dùng URL tương đối.</td></tr>
+      <tr><td>REST để ghi, WS chỉ để đẩy</td><td>POST trả ngay 201; persona/task/deadline đến qua event → UI đơn giản, reconnect chỉ cần refetch.</td></tr>
+      <tr><td>DB là nguồn sự thật, timer chỉ là cache</td><td>Restart → <code>Recover()</code> dựng lại session, deadline, evaluation từ Postgres.</td></tr>
+      <tr><td><code>llm.Provider</code> OpenAI-compatible</td><td>Đổi gateway (9router ↔ Beeknoee) / model chỉ bằng <code>.env</code>, không sửa code.</td></tr>
+      <tr><td>Context per session</td><td>End/expire = <code>Registry.Stop(id)</code> → mọi goroutine của phiên dừng, không rò rỉ.</td></tr>
+    </table>
+    <table>
+      <tr><th>Boot (main.go)</th><th>Shutdown (SIGINT/SIGTERM)</th></tr>
+      <tr><td>
+        1. <code>config.Load()</code> + slog<br>
+        2. pgxpool ping → goose migrate<br>
+        3. Load persona catalog, tạo LLM provider<br>
+        4. Wire Hub → chat → validator → deadline → persona → scenario → evaluation → session<br>
+        5. Recover: sessions → deadlines → evaluations<br>
+        6. <code>ListenAndServe :8080</code>
+      </td><td>
+        1. <code>srv.Shutdown</code> (10s)<br>
+        2. <code>sessions.Shutdown()</code><br>
+        3. <code>deadlines.StopAll()</code><br>
+        4. huỷ <code>appCtx</code> → mọi sessionCtx con<br>
+        <br><small>Phiên ACTIVE vẫn ở DB; lần chạy sau tiếp tục qua Recover.</small>
+      </td></tr>
+    </table>
+  </div>
+</section>
+
+<!-- 3. BACKEND -->
 <section id="backend">
-  <h2>2. Backend — các package Go <small>(internal/, wiring trong cmd/api/main.go)</small></h2>
+  <h2>3. Backend — các package Go <small>(internal/, wiring trong cmd/api/main.go)</small></h2>
   <p class="lead">Mũi tên = "phụ thuộc vào". Các service nghiệp vụ chỉ biết interface <code>llm.Provider</code> và <code>store.Queries</code>; <code>lifecycle.Registry</code> giữ context huỷ được cho từng session.</p>
   <svg viewBox="0 0 1120 560" role="img" aria-label="Backend packages">
     <defs><marker id="b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#888"/></marker></defs>
@@ -222,15 +414,15 @@
     <tr><td><code>deadline</code></td><td>Timer 5' server-side; DB là nguồn sự thật; resolve khi user trả lời hợp lệ; hết hạn → warning + SYSTEM msg.</td></tr>
     <tr><td><code>validator</code></td><td>Heuristic (số từ, emoji, "ok") rồi Haiku trả JSON <code>{addressesRequest,isEnglish,reason}</code>; LLM lỗi → chỉ dùng heuristic.</td></tr>
     <tr><td><code>evaluation</code></td><td>Sau phiên: Sonnet chấm grammar/tone/vocabulary/overall + corrections, lưu JSONB, broadcast.</td></tr>
-    <tr><td><code>llm</code></td><td>Interface <code>Provider</code> + client OpenAI-compatible (SSE) trỏ vào 9router.</td></tr>
+    <tr><td><code>llm</code></td><td>Interface <code>Provider</code> + client OpenAI-compatible (SSE) trỏ vào <code>LLM_BASE_URL</code> (hiện tại: Beeknoee; 9router dự phòng).</td></tr>
     <tr><td><code>lifecycle</code></td><td><code>context.Context</code> huỷ được cho mỗi session → mọi goroutine dừng khi session kết thúc.</td></tr>
     <tr><td><code>store</code></td><td>Code sinh bởi sqlc từ <code>db/queries</code>; migration goose nhúng sẵn, tự chạy khi start.</td></tr>
   </table>
 </section>
 
-<!-- 3. FLOW -->
+<!-- 4. FLOW -->
 <section id="flow">
-  <h2>3. Luồng gửi tin nhắn &amp; persona stream <small>(sequence)</small></h2>
+  <h2>4. Luồng gửi tin nhắn &amp; persona stream <small>(sequence)</small></h2>
   <p class="lead">POST trả về ngay; persona trả lời trong goroutine gắn với context của session.</p>
   <svg viewBox="0 0 1120 600" role="img" aria-label="Message flow">
     <defs><marker id="s" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#333"/></marker></defs>
@@ -240,7 +432,7 @@
       <rect x="450" y="10" width="160" height="36" rx="6" fill="#e9f7f0" stroke="var(--be)"/><text x="530" y="33">chat / deadline</text>
       <rect x="660" y="10" width="160" height="36" rx="6" fill="#fce8ee" stroke="var(--ai)"/><text x="740" y="33">persona.Engine</text>
       <rect x="870" y="10" width="100" height="36" rx="6" fill="#fdf2e6" stroke="var(--db)"/><text x="920" y="33">Postgres</text>
-      <rect x="1000" y="10" width="100" height="36" rx="6" fill="#fce8ee" stroke="var(--ai)"/><text x="1050" y="33">9router</text>
+      <rect x="1000" y="10" width="100" height="36" rx="6" fill="#fce8ee" stroke="var(--ai)"/><text x="1050" y="33">Beeknoee</text>
     </g>
     <g stroke="#bbb" stroke-dasharray="4 4"><line x1="110" y1="46" x2="110" y2="590"/><line x1="320" y1="46" x2="320" y2="590"/><line x1="530" y1="46" x2="530" y2="590"/><line x1="740" y1="46" x2="740" y2="590"/><line x1="920" y1="46" x2="920" y2="590"/><line x1="1050" y1="46" x2="1050" y2="590"/></g>
     <g font-size="12.5" fill="#1d1c1d">
@@ -284,9 +476,9 @@
   </svg>
 </section>
 
-<!-- 4. DEADLINE -->
+<!-- 5. DEADLINE -->
 <section id="deadline">
-  <h2>4. State machine — Deadline 5 phút <small>(server-authoritative)</small></h2>
+  <h2>5. State machine — Deadline 5 phút <small>(server-authoritative)</small></h2>
   <div class="grid2">
     <svg viewBox="0 0 540 330" role="img" aria-label="Deadline state machine">
       <defs><marker id="d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#333"/></marker></defs>
@@ -324,9 +516,9 @@
   </div>
 </section>
 
-<!-- 5. LIFECYCLE -->
+<!-- 6. LIFECYCLE -->
 <section id="lifecycle">
-  <h2>5. Vòng đời một session AI-Solo</h2>
+  <h2>6. Vòng đời một session AI-Solo</h2>
   <svg viewBox="0 0 1120 210" role="img" aria-label="Session lifecycle">
     <defs><marker id="l" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a154b"/></marker></defs>
     <g font-size="13">
@@ -359,9 +551,9 @@
   </svg>
 </section>
 
-<!-- 6. DB -->
+<!-- 7. DB -->
 <section id="db">
-  <h2>6. Database schema <small>(db/migrations/00001_init.sql)</small></h2>
+  <h2>7. Database schema <small>(db/migrations/00001_init.sql)</small></h2>
   <svg viewBox="0 0 1120 470" role="img" aria-label="ER diagram">
     <defs><marker id="e" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#b86a14"/></marker></defs>
     <style>.t{fill:#fff;stroke:#e8912d;stroke-width:1.4}.h{fill:#fdf2e6}.n{font-weight:700;font-size:13px}.f{font-size:11px;fill:#444}</style>
@@ -412,9 +604,9 @@
   </svg>
 </section>
 
-<!-- 7. FRONTEND -->
+<!-- 8. FRONTEND -->
 <section id="frontend">
-  <h2>7. Frontend — cấu trúc &amp; luồng dữ liệu</h2>
+  <h2>8. Frontend — cấu trúc &amp; luồng dữ liệu</h2>
   <div class="grid2">
 <pre class="tree"><b>frontend/src/</b>
 ├─ <b>app/</b>                      <i># App Router (client-side)</i>
@@ -460,9 +652,9 @@
   </div>
 </section>
 
-<!-- 8. CONTRACT -->
+<!-- 9. CONTRACT -->
 <section id="contract">
-  <h2>8. API &amp; WebSocket <small>(chi tiết: docs/CONTRACT.md)</small></h2>
+  <h2>9. API &amp; WebSocket <small>(chi tiết: docs/CONTRACT.md)</small></h2>
   <div class="grid2">
     <table>
       <tr><th>REST <code>/api</code></th><th>Mục đích</th></tr>
@@ -486,15 +678,16 @@
   </div>
 </section>
 
-<!-- 9. CONFIG -->
+<!-- 10. CONFIG -->
 <section id="config">
-  <h2>9. Cấu hình &amp; chạy local</h2>
+  <h2>10. Cấu hình &amp; chạy local</h2>
   <div class="grid2">
     <table>
       <tr><th>backend/.env</th><th>Mặc định</th></tr>
-      <tr><td><code>LLM_BASE_URL</code></td><td><code>http://127.0.0.1:20128/v1</code></td></tr>
-      <tr><td><code>LLM_CHAT_MODEL</code></td><td><code>cc/claude-haiku-4-5-20251001</code></td></tr>
-      <tr><td><code>LLM_EVAL_MODEL</code></td><td><code>cc/claude-sonnet-5-5</code></td></tr>
+      <tr><td><code>LLM_BASE_URL</code></td><td><code>https://platform.beeknoee.com/api/v1</code><br><small>9router <code>http://127.0.0.1:20128/v1</code> giữ dạng comment</small></td></tr>
+      <tr><td><code>LLM_CHAT_MODEL</code></td><td><code>bee-tok/claude-haiku-5-5</code></td></tr>
+      <tr><td><code>LLM_EVAL_MODEL</code></td><td><code>bee-tok/claude-sonnet-5.5</code></td></tr>
+      <tr><td><code>LLM_TIMEOUT</code></td><td>600s</td></tr>
       <tr><td><code>LLM_API_KEY</code></td><td>lấy từ env lúc chạy (không ghi file)</td></tr>
       <tr><td><code>SESSION_DURATION</code></td><td>60m</td></tr>
       <tr><td><code>RESPONSE_TIMEOUT</code></td><td>5m</td></tr>
@@ -507,7 +700,8 @@
       <tr><td>Go API :8080</td><td><code>cd backend &amp;&amp; make run</code></td></tr>
       <tr><td>Next.js :3000</td><td><code>cd frontend &amp;&amp; pnpm dev</code><br><small>.env.local: <code>NEXT_PUBLIC_API_URL=/api</code>, <code>NEXT_PUBLIC_WS_URL=/ws</code></small></td></tr>
       <tr><td>Proxy :5323</td><td><code>node scripts/dev-proxy.mjs</code></td></tr>
-      <tr><td>9router :20128</td><td>chạy sẵn trên máy</td></tr>
+      <tr><td>Cả stack một lệnh</td><td><code>scripts/start.sh</code> → <code>http://localhost:5323</code></td></tr>
+      <tr><td>LLM gateway</td><td>Beeknoee (cloud) · hoặc 9router :20128 local</td></tr>
       <tr><td>Mock UI (không cần BE)</td><td><code>NEXT_PUBLIC_MOCK=1 pnpm dev</code></td></tr>
     </table>
   </div>

@@ -1,5 +1,5 @@
 -- name: CreateSession :one
-INSERT INTO sessions (user_id, expires_at, next_task_at) VALUES ($1, $2, $3) RETURNING *;
+INSERT INTO sessions (user_id, expires_at, next_task_at, work_context) VALUES ($1, $2, $3, $4) RETURNING *;
 
 -- name: GetSession :one
 SELECT * FROM sessions WHERE id = $1;

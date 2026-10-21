@@ -30,7 +30,9 @@ import (
 	"github.com/worklingo/backend/internal/scenario"
 	"github.com/worklingo/backend/internal/session"
 	"github.com/worklingo/backend/internal/store"
+	"github.com/worklingo/backend/internal/task"
 	"github.com/worklingo/backend/internal/validator"
+	"github.com/worklingo/backend/internal/workctx"
 	"github.com/worklingo/backend/internal/ws"
 )
 
@@ -97,8 +99,10 @@ func run() error {
 	engine := persona.NewEngine(cat, q, chatSvc, deadlines, provider, cfg.LLMChatModel, log)
 	sched := scenario.New(scenario.Config{FirstDelay: cfg.TaskFirstDelay, MinInterval: cfg.TaskMinInterval, MaxInterval: cfg.TaskMaxInterval},
 		q, cat, chatSvc, deadlines, hub, provider, cfg.LLMChatModel, log)
+	tasks := task.NewService(q, engine, deadlines, hub, reg, provider, cfg.LLMChatModel, log)
+	wctx := workctx.NewGenerator(provider, cfg.LLMChatModel, log)
 	evalSvc := evaluation.New(appCtx, q, cat, hub, provider, cfg.LLMEvalModel, log)
-	sessions := session.NewManager(pool, q, reg, engine, sched, deadlines, evalSvc, hub, cfg.SessionDuration, log)
+	sessions := session.NewManager(pool, q, reg, engine, sched, deadlines, evalSvc, wctx, hub, cfg.SessionDuration, log)
 
 	// Recovery: sessions first (ends expired ones), then deadlines, then evaluations.
 	if err := sessions.Recover(ctx); err != nil {
@@ -111,7 +115,7 @@ func run() error {
 
 	jwt := auth.NewJWT(cfg.JWTSecret, cfg.JWTTTL)
 	router := apihttp.NewRouter(apihttp.Deps{
-		H:   &handlers.Handlers{Q: q, JWT: jwt, Sessions: sessions, Chat: chatSvc, Engine: engine, Deadlines: deadlines, Registry: reg, Log: log},
+		H:   &handlers.Handlers{Q: q, JWT: jwt, Sessions: sessions, Chat: chatSvc, Engine: engine, Deadlines: deadlines, Tasks: tasks, Registry: reg, Log: log},
 		Hub: hub, JWT: jwt, CORSOrigin: cfg.CORSOrigin, Log: log,
 	})
 	srv := &http.Server{Addr: ":" + cfg.Port, Handler: router, ReadHeaderTimeout: 10 * time.Second}

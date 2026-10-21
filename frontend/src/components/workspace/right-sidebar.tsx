@@ -1,9 +1,10 @@
 "use client";
 
-import { Clock, Flag, Hash, ListTodo, LogOut, MessageCircle, TriangleAlert } from "lucide-react";
+import { useState } from "react";
+import { Briefcase, ChevronDown, Clock, Flag, Hash, ListTodo, LogOut, MessageCircle, TriangleAlert } from "lucide-react";
 import { useNow } from "@/hooks/use-now";
 import { formatCountdown } from "@/lib/format";
-import type { Channel, Deadline, Persona, Session, Task } from "@/lib/types";
+import type { Channel, Deadline, Persona, Session, Task, WorkContext } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { PersonaAvatar } from "@/components/persona-avatar";
 import {
@@ -19,8 +20,52 @@ import {
 } from "@/components/ui/alert-dialog";
 import { DeadlineBadge } from "./deadline-badge";
 import { channelLabel } from "./helpers";
+import { TalkingPointList } from "./talking-points";
 
 const STRIKES = 3;
+
+function WorkContextBlock({ ctx }: { ctx: WorkContext }) {
+  const [open, setOpen] = useState(true);
+  const rows: [string, string][] = [
+    ["Feature", ctx.feature],
+    ["Progress", ctx.progress],
+    ["Blocker", ctx.blocker],
+  ];
+  return (
+    <section className="border-b border-[#e1e1e1] p-4">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-1.5 text-xs font-bold tracking-wide text-[#616061] uppercase"
+      >
+        <Briefcase className="size-3.5" /> Your work context
+        <ChevronDown className={cn("ml-auto size-4 transition-transform", !open && "-rotate-90")} />
+      </button>
+      {open && (
+        <div className="mt-2 text-xs leading-snug text-[#454245]">
+          <div className="text-[13px] font-bold text-[#1d1c1d]">{ctx.project}</div>
+          <p className="mt-0.5">{ctx.projectSummary}</p>
+          <dl className="mt-2 flex flex-col gap-1.5">
+            {rows.map(([k, v]) => (
+              <div key={k}>
+                <dt className="font-bold text-[#616061]">{k}</dt>
+                <dd>{v}</dd>
+              </div>
+            ))}
+          </dl>
+          {ctx.notes.length > 0 && (
+            <ul className="mt-2 list-disc space-y-0.5 pl-4">
+              {ctx.notes.map((n, i) => (
+                <li key={i}>{n}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
 
 type Props = {
   session: Session | null;
@@ -52,7 +97,7 @@ export function RightSidebar({ session, tasks, deadlines, channels, personas, en
   const pendingRequests = deadlines.filter((d) => d.status === "PENDING" && !d.taskId);
 
   return (
-    <aside className="flex h-full w-[300px] shrink-0 flex-col border-l border-[#e1e1e1] bg-[#fbfbfb]">
+    <aside className="flex h-full w-[300px] shrink-0 max-sm:w-[85vw] flex-col border-l border-[#e1e1e1] bg-[#fbfbfb]">
       <div className="flex h-12 shrink-0 items-center border-b border-[#e1e1e1] px-4 text-[15px] font-black text-[#1d1c1d]">
         Session
         {!active && session && (
@@ -106,6 +151,8 @@ export function RightSidebar({ session, tasks, deadlines, channels, personas, en
             Reply within 5 minutes when someone asks you something. Warnings lower your score.
           </p>
         </section>
+
+        {session?.workContext && <WorkContextBlock ctx={session.workContext} />}
 
         <section className="p-4">
           <div className="flex items-center gap-1.5 text-xs font-bold tracking-wide text-[#616061] uppercase">
@@ -163,6 +210,9 @@ export function RightSidebar({ session, tasks, deadlines, channels, personas, en
                         </div>
                       </div>
                     </div>
+                    {(t.talkingPoints ?? []).length > 0 && (
+                      <TalkingPointList points={t.talkingPoints} className="mt-2" />
+                    )}
                     <div className="mt-2 flex flex-wrap items-center gap-1.5">
                       {t.priority === "CRITICAL" && (
                         <span className="rounded bg-[#e01e5a] px-1.5 py-px text-[10px] font-black tracking-wide text-white uppercase">

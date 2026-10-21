@@ -18,7 +18,7 @@ function UnreadPill({ n }: { n: number }) {
   );
 }
 
-export function Sidebar({ username }: { username: string }) {
+export function Sidebar({ username, onNavigate }: { username: string; onNavigate?: () => void }) {
   const channels = useWorkspace((s) => s.channels);
   const personas = useWorkspace((s) => s.personas);
   const activeId = useWorkspace((s) => s.activeChannelId);
@@ -48,9 +48,12 @@ export function Sidebar({ username }: { username: string }) {
       <li key={c.id}>
         <button
           type="button"
-          onClick={() => setActive(c.id)}
+          onClick={() => {
+            setActive(c.id);
+            onNavigate?.();
+          }}
           className={cn(
-            "flex h-7 w-full items-center gap-2 rounded-md px-2.5 text-left text-[15px] text-[#cfc3cf] transition-colors",
+            "flex h-7 w-full items-center max-md:h-9 gap-2 rounded-md px-2.5 text-left text-[15px] text-[#cfc3cf] transition-colors",
             isActive ? "bg-[#1164a3] text-white" : "hover:bg-[#350d36]",
             n > 0 && !isActive && "font-bold text-white",
           )}
@@ -63,7 +66,7 @@ export function Sidebar({ username }: { username: string }) {
   };
 
   return (
-    <nav className="flex h-full w-[260px] shrink-0 flex-col bg-[#3F0E40] text-[#cfc3cf] max-lg:w-[220px]">
+    <nav className="flex h-full w-[260px] shrink-0 flex-col bg-[#3F0E40] text-[#cfc3cf] max-lg:w-[220px] max-md:w-[280px]">
       <div className="flex h-12 shrink-0 items-center justify-between border-b border-[#5d2c5d] px-4">
         <button type="button" className="flex min-w-0 items-center gap-1 text-[18px] font-black text-white">
           <span className="truncate">WorkLingo</span>

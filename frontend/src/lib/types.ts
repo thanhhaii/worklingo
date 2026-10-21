@@ -12,6 +12,15 @@ export type Persona = {
 
 export type SessionStatus = "ACTIVE" | "COMPLETED" | "ABORTED";
 
+export type WorkContext = {
+  project: string;
+  projectSummary: string;
+  feature: string;
+  progress: string;
+  blocker: string;
+  notes: string[];
+};
+
 export type Session = {
   id: string;
   mode: "AI_SOLO";
@@ -20,6 +29,7 @@ export type Session = {
   expiresAt: string;
   endedAt: string | null;
   warnings: number;
+  workContext: WorkContext | null;
 };
 
 export type Channel = {
@@ -49,6 +59,16 @@ export type Message = {
   failed?: boolean;
 };
 
+export type TalkingPoint = {
+  id: string;
+  position: number;
+  /** Vietnamese content the learner must get across */
+  content: string;
+  status: "PENDING" | "COVERED";
+  /** latest judge reason (Vietnamese), "" if never judged */
+  reason: string;
+};
+
 export type Task = {
   id: string;
   sessionId: string;
@@ -56,10 +76,10 @@ export type Task = {
   messageId: string;
   personaId: string;
   title: string;
-  description: string;
   priority: "NORMAL" | "CRITICAL";
   status: "OPEN" | "ACKNOWLEDGED" | "DONE";
   createdAt: string;
+  talkingPoints: TalkingPoint[];
 };
 
 export type Deadline = {
@@ -82,13 +102,40 @@ export type Warning = {
   createdAt: string;
 };
 
-export type CorrectionCategory = "GRAMMAR" | "TONE" | "VOCABULARY";
+export type IssueCategory = "GRAMMAR" | "TONE" | "VOCABULARY";
+export type IssueSeverity = "MAJOR" | "MINOR";
 
-export type Correction = {
+export type MessageIssue = {
   original: string;
   corrected: string;
   explanation: string;
-  category: CorrectionCategory;
+  category: IssueCategory;
+  severity: IssueSeverity;
+};
+
+export type MessageReview = {
+  messageId: string;
+  channelLabel: string;
+  content: string;
+  createdAt: string;
+  issues: MessageIssue[];
+};
+
+export type TalkingPointReview = {
+  talkingPointId: string;
+  content: string;
+  covered: boolean;
+  learnerQuote: string;
+  reason: string;
+  sample: string;
+};
+
+export type TaskReview = {
+  taskId: string;
+  title: string;
+  personaId: string;
+  status: "OPEN" | "ACKNOWLEDGED" | "DONE";
+  talkingPoints: TalkingPointReview[];
 };
 
 export type Evaluation = {
@@ -100,7 +147,8 @@ export type Evaluation = {
   vocabulary: number;
   overall: number;
   summary: string;
-  corrections: Correction[];
+  messageReviews: MessageReview[];
+  taskReviews: TaskReview[];
   createdAt: string;
 };
 
