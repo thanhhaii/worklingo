@@ -278,6 +278,7 @@ export default function ReportPage() {
       </header>
       <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-6 sm:px-6 sm:py-8">
         <h1 className="text-2xl font-black text-[#1d1c1d]">Session report</h1>
+        {session && session.status !== "ACTIVE" && <Link href={`/session/${id}/practice`} className="mt-4 inline-flex rounded-md bg-[#611f69] px-4 py-2 text-sm font-bold text-white hover:bg-[#4a154b]">Practice rewrites</Link>}
         {session && (
           <p className="mt-1 text-sm text-[#616061]">
             {goalLabel(session.learningGoal)} · {session.durationMinutes ? `${session.durationMinutes} minutes planned · ` : ""}{formatDateTime(session.startedAt)} · {durationBetween(session.startedAt, session.endedAt)} ·{" "}

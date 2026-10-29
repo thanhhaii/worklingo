@@ -8,6 +8,10 @@
 import type { HttpRequest, HttpResponse, Transport } from "../api";
 import type { SocketLike } from "../ws";
 import type {
+  PracticeItem,
+  PracticeAnswer,
+  PracticeAttempt,
+  PracticeSubmission,
   Channel,
   LearningGoal,
   Deadline,
@@ -34,7 +38,10 @@ const RESPONSE_TIMEOUT_MS = 5 * 60_000;
 /** The @mention deadline in mock mode is shortened so you can watch it expire. */
 const MOCK_SHORT_DEADLINE_MS = 75_000;
 
+type MockPracticeBatch = PracticeSubmission & { sessionId: string; userId: string; status: "PENDING" | "COMPLETE" | "UNAVAILABLE"; attempts: PracticeAttempt[] };
 type DB = {
+  practiceItems: (PracticeItem & { sourceKey: string; sessionId: string; userId: string })[];
+  practiceBatches: MockPracticeBatch[];
   users: (User & { password: string })[];
   sessions: (Session & { userId: string; scenarioDone: string[]; focusedStep: number; nextTaskAt: string | null })[];
   channels: Channel[];
@@ -48,6 +55,8 @@ type DB = {
 };
 
 const emptyDb = (): DB => ({
+  practiceItems: [],
+  practiceBatches: [],
   users: [],
   sessions: [],
   channels: [],
@@ -78,6 +87,7 @@ function load(): DB {
         for (const r of ev.taskReviews) { r.reviewStatus ??= "UNAVAILABLE"; r.talkingPoints ??= []; }
         if (ev.status === "DONE" && (ev.messageReviewStatus !== "AVAILABLE" || ev.taskReviewStatus !== "AVAILABLE")) ev.status = "PARTIAL";
       }
+      for (const batch of loaded.practiceBatches) { if (batch.status === "PENDING") { batch.status = "UNAVAILABLE"; batch.attempts = batch.answers.map((a) => ({ ...a, verdict: "UNAVAILABLE", feedback: "Lượt luyện tập bị gián đoạn. Câu trả lời đã được lưu, bạn có thể thử lại.", attemptedAt: new Date().toISOString() })); } }
       return loaded;
     }
   } catch {
@@ -769,6 +779,25 @@ async function replyTo(sessionId: string, ch: Channel, userMsg: Message) {
   }
 }
 
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function practiceQueue(sessionId: string, userId: string) {
+  const evaluation = db.evaluations.find((e) => e.sessionId === sessionId);
+  const reviews = evaluation?.messageReviews ?? [];
+  for (const review of reviews) {
+    const source = db.messages.find((m) => m.id === review.messageId && m.sessionId === sessionId && m.authorType === "USER");
+    if (review.reviewStatus !== "AVAILABLE" || !source || source.content !== review.content || [...source.content].length > 4000) continue;
+    for (const [index, issue] of (review.issues ?? []).entries()) {
+      if (!issue.original?.trim() || !issue.corrected?.trim() || !issue.explanation?.trim() || !source.content.includes(issue.original) || [...issue.corrected].length > 4000) continue;
+      const sourceKey = `${evaluation!.id}:${review.messageId}:${index}`;
+      if (db.practiceItems.some((i) => i.sourceKey === sourceKey)) continue;
+      const context = db.messages.filter((m) => m.sessionId === sessionId && m.channelId === source.channelId && m.id !== source.id && m.createdAt <= source.createdAt && (source.parentId ? m.id === source.parentId || m.parentId === source.parentId : !m.parentId)).slice(-2).map((m) => [...m.content].slice(0,1000).join(""));
+      db.practiceItems.push({id:uuid(),sourceKey,sessionId,userId,messageId:review.messageId,category:issue.category,channelLabel:review.channelLabel,original:source.content,target:issue.original,correction:source.content.replace(issue.original,issue.corrected),explanation:[...issue.explanation].slice(0,1000).join(""),context,attempts:[]});
+    }
+  }
+  persist();
+  return {pendingBatches: db.practiceBatches.filter((b) => b.sessionId === sessionId && b.userId === userId && b.status === "PENDING").map((b) => ({requestId:b.requestId,answers:b.answers})), sourceReviewUnavailable: !evaluation || evaluation.messageReviewStatus !== "AVAILABLE" || reviews.some((r) => r.reviewStatus !== "AVAILABLE"), items:db.practiceItems.filter((i) => i.sessionId === sessionId && i.userId === userId).map((i) => ({id:i.id,messageId:i.messageId,category:i.category,channelLabel:i.channelLabel,original:i.original,target:i.target,correction:i.correction,explanation:i.explanation,context:i.context ?? [],attempts:db.practiceBatches.filter((b) => b.sessionId === sessionId && b.userId === userId).flatMap((b) => b.attempts).filter((a) => a.exerciseId === i.id)}))};
+}
+
 // ---------------------------------------------------------------- REST router
 
 async function handle(req: HttpRequest): Promise<HttpResponse> {
@@ -805,6 +834,7 @@ async function handle(req: HttpRequest): Promise<HttpResponse> {
   if (p[0] === "sessions") {
     const mine = db.sessions.filter((s) => s.userId === user.id);
     if (p.length === 1 && M === "POST") {
+      if (req.body !== undefined && (req.body === null || typeof req.body !== "object" || Array.isArray(req.body))) return err(400, "bad_request", "Session options must be an object");
       if (mine.some((s) => s.status === "ACTIVE")) return err(409, "session_active", "you already have an active session");
       const options=(req.body ?? {}) as {durationMinutes?:number;learningGoal?:string};
       if ("durationMinutes" in options && ![10,20,60].includes(options.durationMinutes!)) return err(400,"bad_request","Invalid durationMinutes");
@@ -854,6 +884,38 @@ async function handle(req: HttpRequest): Promise<HttpResponse> {
         warnings: db.warnings.filter((w) => w.sessionId === s.id),
       });
     if (p[2] === "end" && M === "POST") return ok(finishSession(s.id));
+    if (p[2] === "practice" && p.length === 3 && M === "GET") {
+      return ok(practiceQueue(s.id, user.id));
+    }
+    if (p[2] === "practice" && p[3] === "attempts" && p.length === 4 && M === "POST") {
+      const input = req.body as PracticeSubmission | null;
+      if (!input || typeof input !== "object" || !uuidPattern.test(input.requestId ?? "") || !Array.isArray(input.answers) || input.answers.length < 1 || input.answers.length > 5) return err(400, "bad_request", "Submit 1-5 answers and a requestId UUID");
+      const queue = practiceQueue(s.id, user.id);
+      const seen = new Set<string>();
+      const answers: PracticeAnswer[] = [];
+      for (const answer of input.answers) {
+        if (!answer || typeof answer.exerciseId !== "string" || !queue.items.some((i) => i.id === answer.exerciseId) || seen.has(answer.exerciseId) || typeof answer.answer !== "string" || !answer.answer.trim() || [...answer.answer.trim()].length > 4000) return err(400, "bad_request", "Invalid or duplicate practice answer");
+        seen.add(answer.exerciseId); answers.push({exerciseId:answer.exerciseId,answer:answer.answer.trim()});
+      }
+      const existing = db.practiceBatches.find((b) => b.requestId === input.requestId);
+      if (existing) {
+        if (existing.userId !== user.id || existing.sessionId !== s.id || existing.status === "PENDING" || JSON.stringify(existing.answers) !== JSON.stringify(answers)) return err(409, "practice_conflict", "Request is running or its ID was already used");
+        return ok({requestId: existing.requestId, attempts: existing.attempts});
+      }
+      const batch: MockPracticeBatch = {requestId:input.requestId,sessionId:s.id,userId:user.id,answers,status:"PENDING",attempts:[]};
+      db.practiceBatches.push(batch); persist();
+      await sleep(160);
+      batch.attempts = answers.map((a) => {
+        const item = queue.items.find((i) => i.id === a.exerciseId)!;
+        // Demo fixtures only: the real backend uses a semantic judge for all answers.
+        const normalize = (text: string) => text.trim().toLowerCase().replaceAll("’", "'");
+        const samples = [item.correction, item.correction.replace(/I have/g, "I've"), item.correction.replace(/I am/g, "I'm")];
+        const accepted = samples.some((sample) => normalize(sample) === normalize(a.answer));
+        return {...a, verdict: accepted ? "ACCEPTED" as const : "NEEDS_WORK" as const, feedback: accepted ? "Bản mô phỏng: câu viết khớp một phương án mẫu được chấp nhận." : "Bản mô phỏng: hãy thử viết lại câu đầy đủ theo gợi ý. Đánh giá thực tế dùng ngữ nghĩa.", attemptedAt:nowIso()};
+      });
+      batch.status = "COMPLETE";persist();
+      return ok({requestId:batch.requestId,attempts:batch.attempts});
+    }
     if (p[2] === "evaluation" && p[3] === "retry" && p.length === 4 && M === "POST") {
       const ev = db.evaluations.find((e) => e.sessionId === s.id);
       if (s.status === "ACTIVE" || !ev || (ev.status !== "FAILED" && ev.status !== "PARTIAL"))

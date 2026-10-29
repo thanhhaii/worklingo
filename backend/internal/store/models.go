@@ -62,6 +62,28 @@ type Message struct {
 	CreatedAt  time.Time
 }
 
+type PracticeBatch struct {
+	RequestID   uuid.UUID
+	UserID      uuid.UUID
+	SessionID   uuid.UUID
+	Answers     json.RawMessage
+	Results     json.RawMessage
+	Status      string
+	CreatedAt   time.Time
+	CompletedAt *time.Time
+}
+
+type PracticeItem struct {
+	ID           uuid.UUID
+	UserID       uuid.UUID
+	SessionID    uuid.UUID
+	EvaluationID uuid.UUID
+	MessageID    uuid.UUID
+	IssueIndex   int32
+	Snapshot     json.RawMessage
+	CreatedAt    time.Time
+}
+
 type Session struct {
 	ID              uuid.UUID
 	UserID          uuid.UUID

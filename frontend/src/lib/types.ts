@@ -195,3 +195,25 @@ export type ServerEvent =
   | { type: "session.updated"; data: Session }
   | { type: "evaluation.updated"; data: Evaluation }
   | { type: "error"; data: { code: string; message: string } };
+
+export type PracticeAnswer = { exerciseId: string; answer: string };
+export type PracticeAttempt = PracticeAnswer & {
+  verdict: "ACCEPTED" | "NEEDS_WORK" | "UNAVAILABLE";
+  feedback: string;
+  attemptedAt: string;
+};
+export type PracticeItem = {
+  id: string;
+  messageId: string;
+  category: IssueCategory;
+  channelLabel: string;
+  original: string;
+  target: string;
+  correction: string;
+  explanation: string;
+  context: string[];
+  attempts: PracticeAttempt[];
+};
+export type PracticeQueue = { items: PracticeItem[]; sourceReviewUnavailable: boolean; pendingBatches: PracticeSubmission[] };
+export type PracticeSubmission = { requestId: string; answers: PracticeAnswer[] };
+export type PracticeResult = { requestId: string; attempts: PracticeAttempt[] };

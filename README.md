@@ -153,3 +153,9 @@ pnpm build    # production build (includes type-check)
 ## Security note
 
 Never commit `backend/.env` or `frontend/.env.local` (both are in `.gitignore`). Only the `*.env.example` files belong in the repo.
+
+## Rewrite practice
+
+Open **Practice rewrites** from a session report to rewrite reviewed mistakes. Select 1–5 full messages, keep the original meaning, and submit them together for one semantic assessment using the configured evaluation model. Equivalent wording is accepted. Sample corrections stay hidden until revealed, and Vietnamese feedback and attempt history persist. Drafts survive page reloads; failed/quota-limited assessments keep answers and offer a deliberate retry without treating failure as a wrong answer.
+
+Practice GET materializes existing reports without model calls. A durable request ID prevents accidental repeat judging, including when a response is lost; startup recovers interrupted submissions as unavailable. Demo mode uses labeled fixtures rather than semantic assessment. Spaced repetition and a dedicated progress dashboard remain future work. Audio is excluded.

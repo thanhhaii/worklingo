@@ -5,6 +5,9 @@ import type {
   Evaluation,
   Message,
   Persona,
+  PracticeQueue,
+  PracticeSubmission,
+  PracticeResult,
   Session,
   SessionDetails,
   User,
@@ -95,6 +98,8 @@ function enc(s: string) {
 }
 
 export const api = {
+  practice: (sessionId: string) => request<PracticeQueue>("GET", `/sessions/${enc(sessionId)}/practice`),
+  submitPractice: (sessionId: string, submission: PracticeSubmission) => request<PracticeResult>("POST", `/sessions/${enc(sessionId)}/practice/attempts`, submission),
   health: () => request<{ ok: boolean }>("GET", "/health"),
   register: (username: string, email: string, password: string) =>
     request<AuthResponse>("POST", "/auth/register", { username, email, password }),

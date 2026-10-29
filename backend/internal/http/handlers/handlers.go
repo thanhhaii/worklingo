@@ -24,12 +24,14 @@ import (
 	"github.com/worklingo/backend/internal/evaluation"
 	"github.com/worklingo/backend/internal/lifecycle"
 	"github.com/worklingo/backend/internal/persona"
+	"github.com/worklingo/backend/internal/practice"
 	"github.com/worklingo/backend/internal/session"
 	"github.com/worklingo/backend/internal/store"
 	"github.com/worklingo/backend/internal/task"
 )
 
 type Handlers struct {
+	Practice    *practice.Service
 	Q           *store.Queries
 	Evaluations *evaluation.Service
 	JWT         *auth.JWT

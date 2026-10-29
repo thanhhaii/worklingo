@@ -27,6 +27,7 @@ import (
 	"github.com/worklingo/backend/internal/lifecycle"
 	"github.com/worklingo/backend/internal/llm"
 	"github.com/worklingo/backend/internal/persona"
+	"github.com/worklingo/backend/internal/practice"
 	"github.com/worklingo/backend/internal/scenario"
 	"github.com/worklingo/backend/internal/session"
 	"github.com/worklingo/backend/internal/store"
@@ -120,10 +121,14 @@ func run() error {
 		log.Error("recover deadlines", "err", err)
 	}
 	evalSvc.Recover(ctx)
+	practiceSvc := practice.New(q, evalProvider, evalProfile.Model)
+	if err := practiceSvc.Recover(ctx); err != nil {
+		return err
+	}
 
 	jwt := auth.NewJWT(cfg.JWTSecret, cfg.JWTTTL)
 	router := apihttp.NewRouter(apihttp.Deps{
-		H:   &handlers.Handlers{Q: q, JWT: jwt, Evaluations: evalSvc, Sessions: sessions, Chat: chatSvc, Engine: engine, Deadlines: deadlines, Tasks: tasks, Registry: reg, Log: log},
+		H:   &handlers.Handlers{Q: q, JWT: jwt, Evaluations: evalSvc, Practice: practiceSvc, Sessions: sessions, Chat: chatSvc, Engine: engine, Deadlines: deadlines, Tasks: tasks, Registry: reg, Log: log},
 		Hub: hub, JWT: jwt, CORSOrigin: cfg.CORSOrigin, Log: log,
 	})
 	srv := &http.Server{Addr: ":" + cfg.Port, Handler: router, ReadHeaderTimeout: 10 * time.Second}
