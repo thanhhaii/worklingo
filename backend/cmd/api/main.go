@@ -50,6 +50,14 @@ func run() error {
 	}
 	log := newLogger(cfg.LogLevel)
 	slog.SetDefault(log)
+	chatProfile, err := cfg.ChatLLM()
+	if err != nil {
+		return err
+	}
+	evalProfile, err := cfg.EvalLLM()
+	if err != nil {
+		return err
+	}
 
 	migrateOnly := len(os.Args) > 1 && os.Args[1] == "migrate"
 
@@ -80,10 +88,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	if cfg.LLMAPIKey == "" {
-		log.Warn("LLM_API_KEY is empty; LLM calls will likely fail")
-	}
-	provider := llm.NewOpenAICompat(cfg.LLMBaseURL, cfg.LLMAPIKey, cfg.LLMTimeout)
+	chatProvider := newLLMProvider(chatProfile, cfg.LLMTimeout)
+	evalProvider := newLLMProvider(evalProfile, cfg.LLMTimeout)
+	log.Info("LLM profiles selected", "chatProvider", chatProfile.Provider, "chatModel", chatProfile.Model,
+		"evalProvider", evalProfile.Provider, "evalModel", evalProfile.Model)
 
 	appCtx, appCancel := context.WithCancel(context.Background())
 	defer appCancel()
@@ -94,14 +102,14 @@ func run() error {
 		return err == nil && s.UserID == userID
 	})
 	chatSvc := chat.NewService(q, hub)
-	val := validator.New(provider, cfg.LLMChatModel, log)
+	val := validator.New(chatProvider, chatProfile.Model, log)
 	deadlines := deadline.NewService(q, chatSvc, hub, val, reg, cfg.ResponseTimeout, log)
-	engine := persona.NewEngine(cat, q, chatSvc, deadlines, provider, cfg.LLMChatModel, log)
+	engine := persona.NewEngine(cat, q, chatSvc, deadlines, chatProvider, chatProfile.Model, log)
 	sched := scenario.New(scenario.Config{FirstDelay: cfg.TaskFirstDelay, MinInterval: cfg.TaskMinInterval, MaxInterval: cfg.TaskMaxInterval},
-		q, cat, chatSvc, deadlines, hub, provider, cfg.LLMChatModel, log)
-	tasks := task.NewService(q, engine, deadlines, hub, reg, provider, cfg.LLMChatModel, log)
-	wctx := workctx.NewGenerator(provider, cfg.LLMChatModel, log)
-	evalSvc := evaluation.New(appCtx, q, cat, hub, provider, cfg.LLMEvalModel, log)
+		q, cat, chatSvc, deadlines, hub, chatProvider, chatProfile.Model, log)
+	tasks := task.NewService(q, engine, deadlines, hub, reg, chatProvider, chatProfile.Model, log)
+	wctx := workctx.NewGenerator(chatProvider, chatProfile.Model, log)
+	evalSvc := evaluation.New(appCtx, q, cat, hub, evalProvider, evalProfile.Model, log)
 	sessions := session.NewManager(pool, q, reg, engine, sched, deadlines, evalSvc, wctx, hub, cfg.SessionDuration, log)
 
 	// Recovery: sessions first (ends expired ones), then deadlines, then evaluations.
@@ -122,7 +130,7 @@ func run() error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		log.Info("listening", "addr", srv.Addr, "chatModel", cfg.LLMChatModel, "evalModel", cfg.LLMEvalModel,
+		log.Info("listening", "addr", srv.Addr,
 			"sessionDuration", cfg.SessionDuration.String(), "responseTimeout", cfg.ResponseTimeout.String())
 		errCh <- srv.ListenAndServe()
 	}()
@@ -141,6 +149,14 @@ func run() error {
 	deadlines.StopAll()
 	appCancel()
 	return nil
+}
+
+func newLLMProvider(profile config.LLMProfile, timeout time.Duration) *llm.OpenAICompat {
+	provider := llm.NewOpenAICompat(profile.BaseURL, profile.APIKey, timeout)
+	if profile.Provider == "gemini" {
+		provider.ReasoningEffort = "minimal"
+	}
+	return provider
 }
 
 func migrate(pool *pgxpool.Pool) error {

@@ -30,11 +30,18 @@ services:
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
       CORS_ORIGIN: https://${DOMAIN:?set DOMAIN}
       LOG_LEVEL: ${LOG_LEVEL:-info}
-      LLM_BASE_URL: ${LLM_BASE_URL:?set LLM_BASE_URL}
-      LLM_API_KEY: ${LLM_API_KEY:?set LLM_API_KEY}
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      LLM_CHAT_PROVIDER: ${LLM_CHAT_PROVIDER:-}
+      LLM_EVAL_PROVIDER: ${LLM_EVAL_PROVIDER:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://127.0.0.1:20128/v1}
+      LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_CHAT_MODEL: ${LLM_CHAT_MODEL:-claude-haiku-4-5-20251001}
       LLM_EVAL_MODEL: ${LLM_EVAL_MODEL:-claude-sonnet-4-6}
       LLM_TIMEOUT: ${LLM_TIMEOUT:-120s}
+      GEMINI_BASE_URL: ${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_CHAT_MODEL: ${GEMINI_CHAT_MODEL:-gemini-3.1-flash-lite}
+      GEMINI_EVAL_MODEL: ${GEMINI_EVAL_MODEL:-gemini-3.1-flash-lite}
       SESSION_DURATION: ${SESSION_DURATION:-60m}
       RESPONSE_TIMEOUT: ${RESPONSE_TIMEOUT:-5m}
       TASK_FIRST_DELAY: ${TASK_FIRST_DELAY:-2m}

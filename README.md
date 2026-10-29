@@ -29,7 +29,7 @@
 | Backend | Go, chi, coder/websocket, pgx/v5 + sqlc, goose (embedded migrations, applied on startup), slog, JWT + bcrypt |
 | Frontend | Next.js (App Router, TypeScript), Tailwind CSS v4, shadcn/ui (Base UI), zustand, react-markdown |
 | Database | PostgreSQL 17 (Docker, port `5433`) |
-| LLM | Any **OpenAI-compatible** `/chat/completions` endpoint (SSE streaming). Chat and evaluation models are configured separately |
+| LLM | **OpenAI-compatible** `/chat/completions` or Gemini through its compatibility endpoint (SSE streaming). Chat and evaluation providers/models are configured separately |
 
 ## Project layout
 
@@ -51,7 +51,7 @@
 - Go 1.27+
 - Node.js 22 + pnpm
 - Docker (for PostgreSQL)
-- An API key for an OpenAI-compatible LLM provider
+- An API key for an OpenAI-compatible LLM provider or Gemini
 
 ## Quick start
 
@@ -61,7 +61,7 @@ cd worklingo
 
 # 1. Configure the backend
 cp backend/.env.example backend/.env
-#    -> set LLM_BASE_URL, LLM_API_KEY, LLM_CHAT_MODEL, LLM_EVAL_MODEL, JWT_SECRET
+#    -> set JWT_SECRET and the selected provider's API key/settings (see below)
 
 # 2. (optional) Configure the frontend
 cp frontend/.env.example frontend/.env.local
@@ -101,15 +101,30 @@ NEXT_PUBLIC_MOCK=1 pnpm dev
 |---|---|---|
 | `DATABASE_URL` | Postgres connection string | `postgres://worklingo:worklingo@localhost:5433/worklingo?sslmode=disable` |
 | `JWT_SECRET` | JWT signing key, **change it** | insecure dev value |
+| `LLM_PROVIDER` | Startup provider for both roles: `openai` or `gemini` | `openai` |
+| `LLM_CHAT_PROVIDER` / `LLM_EVAL_PROVIDER` | Optional independent role overrides | inherit `LLM_PROVIDER` |
 | `LLM_BASE_URL` | OpenAI-compatible endpoint | `http://127.0.0.1:20128/v1` |
 | `LLM_API_KEY` | API key (sent as `Bearer`) | – |
 | `LLM_CHAT_MODEL` | Model for chat, reply validation and task generation | `cc/claude-haiku-4-5-20251001` |
 | `LLM_EVAL_MODEL` | Model for the end-of-session evaluation | `cc/claude-sonnet-5-5` |
+| `GEMINI_API_KEY` | Backend-only Gemini key; required for selected Gemini roles | – |
+| `GEMINI_BASE_URL` | Gemini compatibility endpoint | `https://generativelanguage.googleapis.com/v1beta/openai` |
+| `GEMINI_CHAT_MODEL` / `GEMINI_EVAL_MODEL` | Independent Gemini role models | `gemini-3.1-flash-lite` |
+| `LLM_TIMEOUT` | Shared HTTP timeout for both role clients | `120s` |
 | `SESSION_DURATION` | Length of a session | `60m` |
 | `RESPONSE_TIMEOUT` | Time allowed to answer a request | `5m` |
 | `TASK_FIRST_DELAY` / `TASK_MIN_INTERVAL` / `TASK_MAX_INTERVAL` | Surprise task timing | `2m` / `6m` / `12m` |
 
 Full list: [`backend/README.md`](backend/README.md). Frontend variables: [`frontend/README.md`](frontend/README.md).
+
+Existing legacy configurations work with no selectors. For Gemini only, set `LLM_PROVIDER=gemini` and `GEMINI_API_KEY`;
+the legacy URL, key and models are unused. For mixed providers, set `LLM_PROVIDER=openai`, `LLM_CHAT_PROVIDER=gemini`,
+and configure both keys; evaluation keeps the legacy profile. Use `LLM_EVAL_PROVIDER=gemini` for Gemini evaluation instead.
+The [backend provider examples](backend/README.md#selecting-providers-and-models) cover all three configurations.
+
+Restart the backend after changing settings (recreate the backend container for production Compose). Keys stay in backend
+configuration and never enter browser settings. Selected Gemini requests use minimal reasoning; very small existing token
+budgets can still produce truncation errors. Provider failures never automatically switch to another paid provider.
 
 ## Development and testing
 
