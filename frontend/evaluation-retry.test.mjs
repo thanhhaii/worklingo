@@ -10,7 +10,7 @@ const testDir = fileURLToPath(new URL('.', import.meta.url));
 test('mock retry preserves available components, rejects running work, and normalizes legacy coverage', async (t) => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'worklingo-evaluation-'));
   t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
-  for (const name of ['lib/personas.ts', 'lib/mock/server.ts']) {
+  for (const name of ['lib/personas.ts', 'lib/focus.ts', 'lib/mock/server.ts']) {
     const target = path.join(tmp, name.replace(/\.ts$/, '.js'));
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, ts.transpileModule(fs.readFileSync(path.join(testDir, 'src', name), 'utf8'), {
@@ -28,7 +28,7 @@ test('mock retry preserves available components, rejects running work, and norma
     tasks: [{ id: 't1', sessionId: 's1', title: 'Keep task', personaId: 'alex', status: 'OPEN' }],
   };
   fixture.sessions.push({ ...fixture.sessions[0], id: 'legacy' }, { ...fixture.sessions[0], id: 'active', status: 'ACTIVE' }, { ...fixture.sessions[0], id: 'missing' });
-  fixture.evaluations.push({ id: 'old', sessionId: 'legacy', status: 'DONE', grammar: 80, messageReviews: [{ messageId: 'old', issues: [] }], taskReviews: [{ taskId: 'old', talkingPoints: [] }] }, { id: 'active-eval', sessionId: 'active', status: 'FAILED' });
+  fixture.evaluations.push({ id: 'old', sessionId: 'legacy', status: 'DONE', grammar: 80, messageReviews: [{ messageId: 'old', issues: null }, { messageId: 'missing' }], taskReviews: [{ taskId: 'old', talkingPoints: null }, { taskId: 'missing' }] }, { id: 'active-eval', sessionId: 'active', status: 'FAILED' });
   global.window = { localStorage: { getItem: () => JSON.stringify(fixture), setItem() {} } };
   t.after(() => delete global.window);
   const { mockTransport } = await import(pathToFileURL(path.join(tmp, 'lib/mock/server.js')).href);
@@ -42,6 +42,8 @@ test('mock retry preserves available components, rejects running work, and norma
   assert.equal(legacy.body.scoreStatus, 'AVAILABLE');
   assert.equal(legacy.body.messageReviews[0].reviewStatus, 'UNAVAILABLE');
   assert.equal(legacy.body.taskReviews[0].reviewStatus, 'UNAVAILABLE');
+  for (const review of legacy.body.messageReviews) assert.deepEqual(review.issues, []);
+  for (const review of legacy.body.taskReviews) assert.deepEqual(review.talkingPoints, []);
   const responses = await Promise.all([mockTransport(req), mockTransport(req)]);
   assert.deepEqual(responses.map(r => r.status).sort(), [202, 409]);
   await new Promise(resolve => setTimeout(resolve, 4200));

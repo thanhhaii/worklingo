@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/worklingo/backend/internal/chat"
 	"github.com/worklingo/backend/internal/deadline"
@@ -28,6 +29,7 @@ type Config struct {
 }
 
 type Scheduler struct {
+	pool      *pgxpool.Pool
 	cfg       Config
 	q         *store.Queries
 	cat       *persona.Catalog
@@ -42,8 +44,8 @@ type Scheduler struct {
 	running map[uuid.UUID]bool
 }
 
-func New(cfg Config, q *store.Queries, cat *persona.Catalog, c *chat.Service, d *deadline.Service, hub ws.Broadcaster, p llm.Provider, model string, log *slog.Logger) *Scheduler {
-	return &Scheduler{cfg: cfg, q: q, cat: cat, chat: c, deadlines: d, hub: hub, llm: p, model: model, log: log, running: map[uuid.UUID]bool{}}
+func New(cfg Config, pool *pgxpool.Pool, q *store.Queries, cat *persona.Catalog, c *chat.Service, d *deadline.Service, hub ws.Broadcaster, p llm.Provider, model string, log *slog.Logger) *Scheduler {
+	return &Scheduler{pool: pool, cfg: cfg, q: q, cat: cat, chat: c, deadlines: d, hub: hub, llm: p, model: model, log: log, running: map[uuid.UUID]bool{}}
 }
 
 // FirstAt returns when the first task should fire for a session starting now.
@@ -77,6 +79,14 @@ func (s *Scheduler) Run(ctx context.Context, sessionID uuid.UUID, nextAt *time.T
 				s.log.Error("scenario panic", "panic", r)
 			}
 		}()
+		sess, err := s.q.GetSession(ctx, sessionID)
+		if err != nil {
+			return
+		}
+		if sess.LearningGoal != nil {
+			s.runFocused(ctx, sessionID)
+			return
+		}
 		next := time.Now().Add(s.cfg.FirstDelay)
 		if nextAt != nil {
 			next = *nextAt

@@ -16,6 +16,7 @@ import (
 
 	"github.com/worklingo/backend/internal/chat"
 	"github.com/worklingo/backend/internal/dto"
+	"github.com/worklingo/backend/internal/focus"
 	"github.com/worklingo/backend/internal/llm"
 	"github.com/worklingo/backend/internal/persona"
 	"github.com/worklingo/backend/internal/store"
@@ -269,7 +270,7 @@ func (s *Service) score(ctx context.Context, d *sessionData) (result, error) {
 	temp := 0.2
 	err := llm.CompleteJSON(ctx, s.llm, llm.Request{
 		Model: s.model, MaxTokens: 3000, Temperature: &temp,
-		Messages: []llm.Message{{Role: llm.RoleSystem, Content: systemPrompt}, {Role: llm.RoleUser, Content: prompt}},
+		Messages: []llm.Message{{Role: llm.RoleSystem, Content: systemPrompt + "\n" + d.goalContext}, {Role: llm.RoleUser, Content: prompt + "\n" + d.goalContext}},
 	}, &out)
 	if err != nil {
 		return out, err
@@ -323,13 +324,14 @@ func (s *Service) finalize(sessionID uuid.UUID) {
 
 // sessionData is everything the evaluation calls need, loaded once.
 type sessionData struct {
-	transcript string
-	warnings   int
-	msgs       []store.Message // non-system, non-empty, chronological
-	learner    []store.Message // USER-authored subset
-	labels     map[uuid.UUID]string
-	tasks      []store.Task
-	points     map[uuid.UUID][]store.TalkingPoint
+	goalContext string
+	transcript  string
+	warnings    int
+	msgs        []store.Message // non-system, non-empty, chronological
+	learner     []store.Message // USER-authored subset
+	labels      map[uuid.UUID]string
+	tasks       []store.Task
+	points      map[uuid.UUID][]store.TalkingPoint
 }
 
 func (s *Service) load(ctx context.Context, sessionID uuid.UUID) (*sessionData, error) {
@@ -354,6 +356,12 @@ func (s *Service) load(ctx context.Context, sessionID uuid.UUID) (*sessionData, 
 		return nil, err
 	}
 	d := &sessionData{warnings: int(sess.Warnings), tasks: tasks, points: map[uuid.UUID][]store.TalkingPoint{}}
+	if sess.LearningGoal != nil {
+		d.goalContext = focus.Instructions(*sess.LearningGoal) + "\nDo not penalize missing rapid responses or ghosting in focused mode.\n"
+		if wc := dto.ParseWorkContext(sess.WorkContext); wc != nil {
+			d.goalContext += wc.Describe()
+		}
+	}
 	for _, p := range pts {
 		d.points[p.TaskID] = append(d.points[p.TaskID], p)
 	}

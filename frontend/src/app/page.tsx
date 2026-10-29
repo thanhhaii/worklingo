@@ -13,7 +13,8 @@ import { ScorePill } from "@/components/score";
 import { ApiError, api, errorMessage } from "@/lib/api";
 import { DEFAULT_PERSONAS } from "@/lib/personas";
 import { durationBetween, formatCountdown, formatDateTime } from "@/lib/format";
-import type { Evaluation, Persona, Session } from "@/lib/types";
+import { FOCUS, goalLabel } from "@/lib/focus";
+import type { Evaluation, Persona, Session, LearningGoal, CreateSessionOptions } from "@/lib/types";
 import { useRequireAuth } from "@/hooks/use-require-auth";
 import { useNow } from "@/hooks/use-now";
 import { useAuth } from "@/store/auth";
@@ -29,6 +30,8 @@ export default function DashboardPage() {
   const [personas, setPersonas] = useState<Persona[]>(DEFAULT_PERSONAS);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  const [duration, setDuration] = useState<10 | 20 | 60>(10);
+  const [goal, setGoal] = useState<LearningGoal | "">("STATUS_UPDATE");
 
   const load = useCallback(async () => {
     try {
@@ -60,7 +63,8 @@ export default function DashboardPage() {
   async function start() {
     setStarting(true);
     try {
-      const s = await api.createSession();
+      const options:CreateSessionOptions={durationMinutes:duration};if(goal)options.learningGoal=goal;
+      const s = await api.createSession(options);
       router.push(`/session/${s.id}`);
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {
@@ -112,9 +116,8 @@ export default function DashboardPage() {
         <section className="rounded-xl border border-[#e1e1e1] bg-white p-5 shadow-sm sm:p-8">
           <h1 className="text-2xl font-bold text-[#1d1c1d]">Welcome back, {user?.username}</h1>
           <p className="mt-2 max-w-2xl text-[15px] text-[#454245]">
-            Join a simulated workspace for 60 minutes. Your AI teammates will chat, ask questions and drop surprise
-            tasks. Reply in clear, professional English within 5 minutes when someone needs you, or you&apos;ll get a
-            ghosting warning.
+            Practice professional English in a simulated workspace. Choose one writing goal for a few focused tasks
+            with relaxed timing and no ghosting warnings, or try the full simulation with surprise tasks and response deadlines.
           </p>
           <div className="mt-5 flex flex-wrap gap-4">
             {personas.map((p) => (
@@ -127,6 +130,20 @@ export default function DashboardPage() {
               </div>
             ))}
           </div>
+          {!active && <div className="mt-6 flex flex-wrap gap-4 text-sm">
+            <label className="flex flex-col gap-1 font-bold">Practice goal
+              <select className="rounded-md border bg-white p-2 font-normal" value={goal} onChange={(e)=>setGoal(e.target.value as LearningGoal | "")} disabled={starting}>
+                <option value="">Full simulation</option>
+                {Object.entries(FOCUS).map(([key,value])=><option key={key} value={key}>{value.label}</option>)}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 font-bold">Duration
+              <select className="rounded-md border bg-white p-2 font-normal" value={duration} onChange={(e)=>setDuration(Number(e.target.value) as 10|20|60)} disabled={starting}>
+                {[10,20,60].map((n)=><option key={n} value={n}>{n} minutes</option>)}
+              </select>
+            </label>
+            <p className="w-full text-[#616061]">{goal ? `${duration <= 10 ? 2 : 3} tasks · ${FOCUS[goal].instruction} Reply in each task’s thread. No response deadlines or ghosting warnings.` : "Surprise workplace tasks and response deadlines. Ghosting warnings affect feedback."}</p>
+          </div>}
           <div className="mt-6">
             {active ? (
               <div className="flex flex-wrap items-center gap-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
@@ -138,9 +155,10 @@ export default function DashboardPage() {
                     <span className="flex items-center gap-1">
                       <Clock className="size-3.5" /> {formatCountdown(activeRemaining)} left
                     </span>
-                    <span className="flex items-center gap-1">
+                    <span>{goalLabel(active.learningGoal)} · {active.durationMinutes ?? Math.round((new Date(active.expiresAt).getTime()-new Date(active.startedAt).getTime())/60000)} minutes</span>
+                    {!active.learningGoal && <span className="flex items-center gap-1">
                       <TriangleAlert className="size-3.5" /> {active.warnings} warning(s)
-                    </span>
+                    </span>}
                   </div>
                 </div>
                 <Button
@@ -188,7 +206,7 @@ export default function DashboardPage() {
                   <div className="min-w-0 flex-1">
                     <div className="text-sm font-bold text-[#1d1c1d]">{formatDateTime(s.startedAt)}</div>
                     <div className="text-xs text-[#616061]">
-                      {durationBetween(s.startedAt, s.endedAt)} · {s.warnings} warning(s)
+                      {goalLabel(s.learningGoal)} · {s.durationMinutes ? `${s.durationMinutes} min planned · ` : ""}{durationBetween(s.startedAt, s.endedAt)}{!s.learningGoal && ` · ${s.warnings} warning(s)`}
                     </div>
                   </div>
                   <Badge variant={s.status === "COMPLETED" ? "secondary" : "outline"} className="max-sm:hidden">{s.status}</Badge>

@@ -47,8 +47,17 @@ func NewService(q *store.Queries, c *chat.Service, hub ws.Broadcaster, val *vali
 // Timeout is the configured response window.
 func (s *Service) Timeout() time.Duration { return s.timeout }
 
+var ErrFocusedPolicy = errors.New("response deadline skipped for focused session")
+
 // Create inserts a PENDING deadline for messageID and starts its timer.
 func (s *Service) Create(ctx context.Context, sessionID, channelID, messageID uuid.UUID, taskID *uuid.UUID) (store.Deadline, error) {
+	sess, err := s.q.GetSession(ctx, sessionID)
+	if err != nil {
+		return store.Deadline{}, err
+	}
+	if sess.LearningGoal != nil {
+		return store.Deadline{}, ErrFocusedPolicy
+	}
 	d, err := s.q.CreateDeadline(ctx, store.CreateDeadlineParams{
 		SessionID: sessionID, ChannelID: channelID, MessageID: messageID, TaskID: taskID,
 		DeadlineAt: time.Now().Add(s.timeout),
@@ -213,6 +222,9 @@ func (s *Service) OnUserMessage(ctx context.Context, m store.Message) {
 // ValidateReply is the synchronous variant of OnUserMessage: it validates the
 // reply against the pending deadlines and returns when done.
 func (s *Service) ValidateReply(ctx context.Context, m store.Message) {
+	if sess, err := s.q.GetSession(ctx, m.SessionID); err != nil || sess.LearningGoal != nil {
+		return
+	}
 	if candidates := s.candidates(ctx, m); len(candidates) > 0 {
 		s.validateAndResolve(ctx, m, candidates)
 	}

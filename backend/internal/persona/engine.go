@@ -14,6 +14,7 @@ import (
 	"github.com/worklingo/backend/internal/chat"
 	"github.com/worklingo/backend/internal/deadline"
 	"github.com/worklingo/backend/internal/dto"
+	"github.com/worklingo/backend/internal/focus"
 	"github.com/worklingo/backend/internal/llm"
 	"github.com/worklingo/backend/internal/store"
 )
@@ -95,6 +96,33 @@ func (e *Engine) FollowUp(ctx context.Context, ch store.Channel, user store.User
 }
 
 func (e *Engine) chooseResponders(ctx context.Context, ch store.Channel, user store.User, m store.Message) []string {
+	if sess, err := e.q.GetSession(ctx, ch.SessionID); err == nil && sess.LearningGoal != nil {
+		if m.ParentID != nil {
+			if parent, err := e.q.GetMessage(ctx, *m.ParentID); err == nil && parent.PersonaID != nil {
+				return []string{*parent.PersonaID}
+			}
+		}
+		for _, tok := range chat.ParseMentions(m.Content) {
+			if pid, ok := e.cat.ByMention(tok); ok {
+				return []string{pid}
+			}
+		}
+		tasks, _ := e.q.ListTasks(ctx, ch.SessionID)
+		var newest *store.Task
+		for i := range tasks {
+			t := &tasks[i]
+			if t.ChannelID == ch.ID && (newest == nil || t.CreatedAt.After(newest.CreatedAt)) {
+				newest = t
+			}
+		}
+		if newest != nil {
+			return []string{newest.PersonaID}
+		}
+		if ch.Kind == "DM" && ch.PersonaID != nil {
+			return []string{*ch.PersonaID}
+		}
+		return []string{focus.Templates(*sess.LearningGoal)[0].PersonaID}
+	}
 	if ch.Kind == "DM" && ch.PersonaID != nil {
 		return []string{*ch.PersonaID}
 	}
@@ -252,11 +280,19 @@ func (e *Engine) Reply(ctx context.Context, ch store.Channel, user store.User, p
 		e.log.Error("load history", "err", err)
 		return store.Message{}, false
 	}
+	goal := ""
 	var wc *dto.WorkContext
 	if sess, err := e.q.GetSession(ctx, ch.SessionID); err == nil {
 		wc = dto.ParseWorkContext(sess.WorkContext)
+		if sess.LearningGoal != nil {
+			goal = *sess.LearningGoal
+			opts.SkipDeadline = true
+		}
 	}
 	sys := e.cat.SystemPrompt(p, user.Username, e.ChannelLabel(ch, user.Username), wc)
+	if goal != "" {
+		sys += "\n" + focus.Instructions(goal)
+	}
 	userPrompt := fmt.Sprintf("Conversation so far in %s (oldest first):\n%s\nWrite your next message as %s (@%s). Reply with the message text only.",
 		e.ChannelLabel(ch, user.Username), e.transcript(hist, user.Username), p.DisplayName, p.Handle)
 	if opts.ExtraInstruction != "" {
@@ -316,6 +352,9 @@ func NeedsResponse(content, username string) bool {
 }
 
 func (e *Engine) maybeCreateDeadline(ctx context.Context, m store.Message, username string) {
+	if sess, err := e.q.GetSession(ctx, m.SessionID); err != nil || sess.LearningGoal != nil {
+		return
+	}
 	if !chat.Mentions(m.Content, username) {
 		return
 	}
@@ -353,7 +392,8 @@ func (e *Engine) PostStatic(ctx context.Context, ch store.Channel, username, per
 	if err != nil {
 		return m, err
 	}
-	if NeedsResponse(content, username) {
+	sess, serr := e.q.GetSession(ctx, ch.SessionID)
+	if serr == nil && sess.LearningGoal == nil && NeedsResponse(content, username) {
 		if _, err := e.deadlines.Create(ctx, ch.SessionID, ch.ID, m.ID, nil); err != nil {
 			e.log.Error("create deadline", "err", err)
 		}

@@ -106,7 +106,7 @@ func run() error {
 	deadlines := deadline.NewService(q, chatSvc, hub, val, reg, cfg.ResponseTimeout, log)
 	engine := persona.NewEngine(cat, q, chatSvc, deadlines, chatProvider, chatProfile.Model, log)
 	sched := scenario.New(scenario.Config{FirstDelay: cfg.TaskFirstDelay, MinInterval: cfg.TaskMinInterval, MaxInterval: cfg.TaskMaxInterval},
-		q, cat, chatSvc, deadlines, hub, chatProvider, chatProfile.Model, log)
+		pool, q, cat, chatSvc, deadlines, hub, chatProvider, chatProfile.Model, log)
 	tasks := task.NewService(q, engine, deadlines, hub, reg, chatProvider, chatProfile.Model, log)
 	wctx := workctx.NewGenerator(chatProvider, chatProfile.Model, log)
 	evalSvc := evaluation.New(appCtx, q, cat, hub, evalProvider, evalProfile.Model, log)

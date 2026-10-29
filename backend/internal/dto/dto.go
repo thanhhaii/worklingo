@@ -31,13 +31,15 @@ type Persona struct {
 }
 
 type Session struct {
-	ID        string     `json:"id"`
-	Mode      string     `json:"mode"`
-	Status    string     `json:"status"`
-	StartedAt time.Time  `json:"startedAt"`
-	ExpiresAt time.Time  `json:"expiresAt"`
-	EndedAt   *time.Time `json:"endedAt"`
-	Warnings  int        `json:"warnings"`
+	LearningGoal    *string    `json:"learningGoal"`
+	DurationMinutes *int32     `json:"durationMinutes"`
+	ID              string     `json:"id"`
+	Mode            string     `json:"mode"`
+	Status          string     `json:"status"`
+	StartedAt       time.Time  `json:"startedAt"`
+	ExpiresAt       time.Time  `json:"expiresAt"`
+	EndedAt         *time.Time `json:"endedAt"`
+	Warnings        int        `json:"warnings"`
 
 	WorkContext *WorkContext `json:"workContext"`
 }
@@ -217,7 +219,7 @@ func FromUser(u store.User) User {
 
 func FromSession(s store.Session) Session {
 	return Session{
-		ID: s.ID.String(), Mode: s.Mode, Status: s.Status,
+		ID: s.ID.String(), Mode: s.Mode, Status: s.Status, LearningGoal: s.LearningGoal, DurationMinutes: s.DurationMinutes,
 		StartedAt: utc(s.StartedAt), ExpiresAt: utc(s.ExpiresAt), EndedAt: utcPtr(s.EndedAt),
 		Warnings: int(s.Warnings), WorkContext: ParseWorkContext(s.WorkContext),
 	}

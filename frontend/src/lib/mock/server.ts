@@ -9,6 +9,7 @@ import type { HttpRequest, HttpResponse, Transport } from "../api";
 import type { SocketLike } from "../ws";
 import type {
   Channel,
+  LearningGoal,
   Deadline,
   Evaluation,
   Message,
@@ -25,6 +26,8 @@ import type {
 } from "../types";
 import { DEFAULT_PERSONAS, CHANNEL_ORDER } from "../personas";
 
+import { FOCUS, focusedDue, focusedLimit } from "../focus";
+
 const STORE_KEY = "worklingo.mockdb.v1";
 const SESSION_MINUTES = 60;
 const RESPONSE_TIMEOUT_MS = 5 * 60_000;
@@ -33,7 +36,7 @@ const MOCK_SHORT_DEADLINE_MS = 75_000;
 
 type DB = {
   users: (User & { password: string })[];
-  sessions: (Session & { userId: string; scenarioDone: string[] })[];
+  sessions: (Session & { userId: string; scenarioDone: string[]; focusedStep: number; nextTaskAt: string | null })[];
   channels: Channel[];
   messages: Message[];
   tasks: Task[];
@@ -64,14 +67,15 @@ function load(): DB {
     const raw = window.localStorage.getItem(STORE_KEY);
     if (raw) {
       const loaded = { ...emptyDb(), ...(JSON.parse(raw) as DB) };
+      for (const s of loaded.sessions) {s.learningGoal ??= null;s.durationMinutes ??= null;s.focusedStep ??= 0;s.nextTaskAt ??= null;s.scenarioDone ??= []}
       for (const ev of loaded.evaluations) {
         ev.scoreStatus ??= ev.status === "DONE" || ev.status === "PARTIAL" ? "AVAILABLE" : "UNAVAILABLE";
         ev.messageReviewStatus ??= "UNAVAILABLE";
         ev.taskReviewStatus ??= "UNAVAILABLE";
         ev.messageReviews ??= [];
         ev.taskReviews ??= [];
-        for (const r of ev.messageReviews) r.reviewStatus ??= "UNAVAILABLE";
-        for (const r of ev.taskReviews) r.reviewStatus ??= "UNAVAILABLE";
+        for (const r of ev.messageReviews) { r.reviewStatus ??= "UNAVAILABLE"; r.issues ??= []; }
+        for (const r of ev.taskReviews) { r.reviewStatus ??= "UNAVAILABLE"; r.talkingPoints ??= []; }
         if (ev.status === "DONE" && (ev.messageReviewStatus !== "AVAILABLE" || ev.taskReviewStatus !== "AVAILABLE")) ev.status = "PARTIAL";
       }
       return loaded;
@@ -88,14 +92,13 @@ function save() {
   if (saveTimer) return;
   saveTimer = setTimeout(() => {
     saveTimer = null;
-    try {
-      // don't persist in-flight streaming state
-      const snapshot: DB = { ...db, messages: db.messages.map((m) => ({ ...m, streaming: undefined })) };
-      window.localStorage.setItem(STORE_KEY, JSON.stringify(snapshot));
-    } catch {
-      // quota etc.
-    }
+    persist();
   }, 200);
+}
+
+function persist() {
+ if(typeof window==="undefined")return;
+ try {const snapshot:DB={...db,messages:db.messages.map((m)=>({...m,streaming:undefined}))};window.localStorage.setItem(STORE_KEY,JSON.stringify(snapshot))}catch{/* local storage unavailable */}
 }
 
 const uuid = () =>
@@ -121,6 +124,8 @@ function publicUser(u: User & { password: string }): User {
 function publicSession(s: DB["sessions"][number]): Session {
   return {
     id: s.id,
+    learningGoal: s.learningGoal,
+    durationMinutes: s.durationMinutes,
     mode: s.mode,
     status: s.status,
     startedAt: s.startedAt,
@@ -255,7 +260,7 @@ function addMessage(m: Omit<Message, "id" | "createdAt">): Message {
 }
 
 function sessionActive(sessionId: string) {
-  return db.sessions.find((s) => s.id === sessionId)?.status === "ACTIVE";
+  const s=db.sessions.find((s)=>s.id===sessionId);return s?.status === "ACTIVE" && Date.now()<new Date(s.expiresAt).getTime();
 }
 
 /** Stream a persona message: typing → message.new(streaming) → deltas → message.done */
@@ -391,12 +396,13 @@ function coverTalkingPoints(sessionId: string, ch: Channel, msg: Message): { fol
       (t.talkingPoints ?? []).some((p) => p.status === "PENDING"),
   );
   if (msg.parentId) candidates = candidates.filter((t) => t.messageId === msg.parentId);
-  else candidates = candidates.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 2);
+  else candidates = candidates.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, db.sessions.find((s)=>s.id===sessionId)?.learningGoal ? 1 : 2);
   for (const t of candidates) {
     const next = [...(t.talkingPoints ?? [])].sort((a, b) => a.position - b.position).find((p) => p.status === "PENDING");
     if (!next) continue;
     next.status = "COVERED";
     next.reason = "Bạn đã truyền đạt đúng ý này.";
+    if (db.sessions.find((s)=>s.id===sessionId)?.learningGoal && t.status==="OPEN") t.status="ACKNOWLEDGED";
     const pending = (t.talkingPoints ?? []).some((p) => p.status === "PENDING");
     if (!pending) t.status = "DONE";
     emit(sessionId, { type: "task.updated", data: t });
@@ -417,7 +423,7 @@ async function sendFollowUp(sessionId: string, ch: Channel, t: Task) {
     "Thanks, that helps. One thing is still missing though: could you also cover the rest of what I asked for? A short reply here in the thread is fine.",
     t.messageId,
   );
-  if (msg) createDeadline(sessionId, ch.id, msg.id, t.id, RESPONSE_TIMEOUT_MS);
+  if (msg && !db.sessions.find((s)=>s.id===sessionId)?.learningGoal) createDeadline(sessionId, ch.id, msg.id, t.id, RESPONSE_TIMEOUT_MS);
 }
 
 // ---------------------------------------------------------------- scenario
@@ -533,6 +539,28 @@ const SCENARIO: Step[] = [
   },
 ];
 
+function focusedStep(s: DB["sessions"][number]) {
+  if (!s.learningGoal || !sessionActive(s.id) || !s.nextTaskAt || Date.now() < new Date(s.nextTaskAt).getTime()) return;
+  const start = new Date(s.startedAt).getTime(), expiry = new Date(s.expiresAt).getTime();
+  const limit = focusedLimit(expiry-start);
+  if (s.focusedStep >= limit) return;
+  const template = FOCUS[s.learningGoal].templates[s.focusedStep]!;
+  const ch = channelByName(s.id, template.channel);
+  const username = db.users.find((u)=>u.id===s.userId)?.username ?? "you";
+  const msg = addMessage({sessionId:s.id,channelId:ch.id,parentId:null,authorType:"PERSONA",userId:null,personaId:template.personaId,content:template.message.replaceAll("{{username}}",username)});
+  const task:Task={id:uuid(),sessionId:s.id,channelId:ch.id,messageId:msg.id,personaId:template.personaId,title:template.title,priority:"NORMAL",status:"OPEN",createdAt:nowIso(),talkingPoints:makePoints(template.points)};
+  db.tasks.push(task);s.focusedStep++;
+  const due=focusedDue(start,expiry,s.focusedStep);
+  s.nextTaskAt=s.focusedStep<limit?new Date(Math.max(due,Date.now()+1500)).toISOString():null;
+  // Commit the complete task and scheduling state together before broadcasting.
+  persist();emit(s.id,{type:"message.new",data:msg});emit(s.id,{type:"task.new",data:task});
+}
+
+function scheduleFocused(s: DB["sessions"][number],timers: ReturnType<typeof setTimeout>[]) {
+ if (!s.nextTaskAt) return;
+ timers.push(setTimeout(()=>{focusedStep(s);if(sessionActive(s.id))scheduleFocused(s,timers)},Math.max(0,new Date(s.nextTaskAt).getTime()-Date.now())));
+}
+
 const schedulers = new Map<string, ReturnType<typeof setTimeout>[]>();
 
 function ensureScheduler(sessionId: string) {
@@ -541,7 +569,8 @@ function ensureScheduler(sessionId: string) {
   if (!s || s.status !== "ACTIVE") return;
   const timers: ReturnType<typeof setTimeout>[] = [];
   const started = new Date(s.startedAt).getTime();
-  for (const step of SCENARIO) {
+  if (s.learningGoal) scheduleFocused(s,timers);
+  else for (const step of SCENARIO) {
     if (s.scenarioDone.includes(step.key)) continue;
     const delay = Math.max(0, started + step.atMs - Date.now());
     timers.push(
@@ -677,6 +706,8 @@ function completeEvaluation(sessionId: string) {
         }),
       };
     });
+  const goal=db.sessions.find((s)=>s.id===sessionId)?.learningGoal;
+  if(goal)ev.summary=`Focused practice: ${FOCUS[goal].label}. ${FOCUS[goal].instruction} This mock report uses sample feedback; relaxed timing has no ghosting penalty.`;
   ev.messageReviewStatus = "AVAILABLE";
   ev.taskReviewStatus = "AVAILABLE";
   ev.status = "DONE";
@@ -721,10 +752,18 @@ function pickResponders(ch: Channel, content: string): string[] {
 }
 
 async function replyTo(sessionId: string, ch: Channel, userMsg: Message) {
-  const responders = pickResponders(ch, userMsg.content);
+  const s=db.sessions.find((s)=>s.id===sessionId);
+  let responders = pickResponders(ch, userMsg.content);
+  if(s?.learningGoal){
+    const parent=db.messages.find((m)=>m.id===userMsg.parentId);
+    const mention=(userMsg.content.match(/@([a-z0-9_]+)/gi)??[]).map((token)=>DEFAULT_PERSONAS.find((p)=>p.id===token.slice(1).toLowerCase()||p.handle===token.slice(1).toLowerCase())?.id).find(Boolean);
+    const task=db.tasks.filter((t)=>t.channelId===ch.id).sort((a,b)=>b.createdAt.localeCompare(a.createdAt))[0];
+    responders=[parent?.personaId ?? mention ?? task?.personaId ?? ch.personaId ?? FOCUS[s.learningGoal].templates[0]!.personaId];
+  }
   for (const pid of responders) {
     const list = REPLIES[pid]!;
-    const text = list[replyIdx[pid]! % list.length]!;
+    const focusedReplies:Record<LearningGoal,string>={STATUS_UPDATE:"Thanks for the update. Please keep the progress, blocker, and next action clear for stakeholders.",CLARIFY_REQUIREMENTS:"Thanks for checking before committing. Please confirm the CSV columns and date range so we can agree on the scope.",REQUEST_EXTENSION:"Thanks for explaining the dependency. A sandbox demo on Monday and a revised Wednesday target would help us plan.",POLITE_PUSHBACK:"Thanks for explaining the tradeoff. Let’s protect the mandatory role checks and agree on staged delivery.",INCIDENT_UPDATE:"Thanks for the update. Please keep confirmed impact separate from the suspected cause, with the next update at 11:15 UTC."};
+    const text = s?.learningGoal ? focusedReplies[s.learningGoal] : list[replyIdx[pid]! % list.length]!;
     replyIdx[pid]!++;
     await streamPersona(sessionId, ch.id, pid, text, userMsg.parentId);
   }
@@ -767,17 +806,24 @@ async function handle(req: HttpRequest): Promise<HttpResponse> {
     const mine = db.sessions.filter((s) => s.userId === user.id);
     if (p.length === 1 && M === "POST") {
       if (mine.some((s) => s.status === "ACTIVE")) return err(409, "session_active", "you already have an active session");
+      const options=(req.body ?? {}) as {durationMinutes?:number;learningGoal?:string};
+      if ("durationMinutes" in options && ![10,20,60].includes(options.durationMinutes!)) return err(400,"bad_request","Invalid durationMinutes");
+      if ("learningGoal" in options && (typeof options.learningGoal!=="string" || !Object.hasOwn(FOCUS,options.learningGoal))) return err(400,"bad_request","Invalid learningGoal");
+      const learningGoal=(options.learningGoal ?? null) as LearningGoal|null;
+      const durationMinutes=(options.durationMinutes ?? null) as 10|20|60|null;
       const start = new Date();
+      const expires = start.getTime()+(durationMinutes ?? SESSION_MINUTES)*60_000;
       const s = {
         id: uuid(),
         userId: user.id,
         mode: "AI_SOLO" as const,
         status: "ACTIVE" as const,
         startedAt: start.toISOString(),
-        expiresAt: new Date(start.getTime() + SESSION_MINUTES * 60_000).toISOString(),
+        expiresAt: new Date(expires).toISOString(),
+        learningGoal, durationMinutes, focusedStep:0, nextTaskAt:learningGoal?new Date(focusedDue(start.getTime(),expires,0)).toISOString():null,
         endedAt: null,
         warnings: 0,
-        workContext: MOCK_WORK_CONTEXT,
+        workContext: learningGoal ? FOCUS[learningGoal].context : MOCK_WORK_CONTEXT,
         scenarioDone: [] as string[],
       };
       db.sessions.push(s);

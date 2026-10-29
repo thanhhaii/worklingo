@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Briefcase, ChevronDown, Clock, Flag, Hash, ListTodo, LogOut, MessageCircle, TriangleAlert } from "lucide-react";
 import { useNow } from "@/hooks/use-now";
+import { goalLabel } from "@/lib/focus";
 import { formatCountdown } from "@/lib/format";
 import type { Channel, Deadline, Persona, Session, Task, WorkContext } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -105,6 +106,7 @@ export function RightSidebar({ session, tasks, deadlines, channels, personas, en
         )}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
+        <section className="border-b border-[#e1e1e1] p-4 text-sm"><b>{goalLabel(session?.learningGoal)}</b><p className="mt-1 text-xs text-[#616061]">{session?.durationMinutes ? `${session.durationMinutes} minutes` : `${Math.round(total/60000)} minutes`} planned{session?.learningGoal && " · Relaxed timing: reply in each task’s thread. No response deadlines or ghosting warnings."}</p></section>
         <section className="border-b border-[#e1e1e1] p-4">
           <div className="flex items-center gap-1.5 text-xs font-bold tracking-wide text-[#616061] uppercase">
             <Clock className="size-3.5" /> Time remaining
@@ -125,7 +127,7 @@ export function RightSidebar({ session, tasks, deadlines, channels, personas, en
           </div>
         </section>
 
-        <section className="border-b border-[#e1e1e1] p-4">
+        {!session?.learningGoal && <section className="border-b border-[#e1e1e1] p-4">
           <div className="flex items-center gap-1.5 text-xs font-bold tracking-wide text-[#616061] uppercase">
             <TriangleAlert className="size-3.5" /> Ghosting warnings
           </div>
@@ -150,7 +152,7 @@ export function RightSidebar({ session, tasks, deadlines, channels, personas, en
           <p className="mt-2 text-xs text-[#616061]">
             Reply within 5 minutes when someone asks you something. Warnings lower your score.
           </p>
-        </section>
+        </section>}
 
         {session?.workContext && <WorkContextBlock ctx={session.workContext} />}
 

@@ -9,6 +9,7 @@ import { Logo } from "@/components/logo";
 import { scoreColor } from "@/components/score";
 import { api, errorMessage, getToken } from "@/lib/api";
 import { durationBetween, formatDateTime, formatTime } from "@/lib/format";
+import { goalLabel } from "@/lib/focus";
 import type { Evaluation, IssueCategory, MessageReview, ReviewStatus, SessionDetails, TaskReview } from "@/lib/types";
 import { WsClient } from "@/lib/ws";
 import { cn } from "@/lib/utils";
@@ -279,9 +280,9 @@ export default function ReportPage() {
         <h1 className="text-2xl font-black text-[#1d1c1d]">Session report</h1>
         {session && (
           <p className="mt-1 text-sm text-[#616061]">
-            {formatDateTime(session.startedAt)} · {durationBetween(session.startedAt, session.endedAt)} ·{" "}
+            {goalLabel(session.learningGoal)} · {session.durationMinutes ? `${session.durationMinutes} minutes planned · ` : ""}{formatDateTime(session.startedAt)} · {durationBetween(session.startedAt, session.endedAt)} ·{" "}
             <span className={cn(session.warnings > 0 && "font-bold text-[#e01e5a]")}>
-              {session.warnings} ghosting warning(s)
+              {session.learningGoal ? "Relaxed timing · No ghosting warnings" : `${session.warnings} ghosting warning(s)`}
             </span>{" "}
             · {details?.tasks.length ?? 0} task(s)
           </p>

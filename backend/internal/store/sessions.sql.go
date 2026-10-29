@@ -12,9 +12,23 @@ import (
 	"github.com/google/uuid"
 )
 
+const advanceFocusedSession = `-- name: AdvanceFocusedSession :exec
+UPDATE sessions SET focused_step=focused_step+1,next_task_at=$2 WHERE id=$1
+`
+
+type AdvanceFocusedSessionParams struct {
+	ID         uuid.UUID
+	NextTaskAt *time.Time
+}
+
+func (q *Queries) AdvanceFocusedSession(ctx context.Context, arg AdvanceFocusedSessionParams) error {
+	_, err := q.db.Exec(ctx, advanceFocusedSession, arg.ID, arg.NextTaskAt)
+	return err
+}
+
 const completeSession = `-- name: CompleteSession :one
 UPDATE sessions SET status = 'COMPLETED', ended_at = now()
-WHERE id = $1 AND status = 'ACTIVE' RETURNING id, user_id, mode, status, started_at, expires_at, ended_at, warnings, next_task_at, work_context
+WHERE id = $1 AND status = 'ACTIVE' RETURNING id, user_id, mode, status, started_at, expires_at, ended_at, warnings, next_task_at, work_context, learning_goal, duration_minutes, focused_step
 `
 
 func (q *Queries) CompleteSession(ctx context.Context, id uuid.UUID) (Session, error) {
@@ -31,19 +45,24 @@ func (q *Queries) CompleteSession(ctx context.Context, id uuid.UUID) (Session, e
 		&i.Warnings,
 		&i.NextTaskAt,
 		&i.WorkContext,
+		&i.LearningGoal,
+		&i.DurationMinutes,
+		&i.FocusedStep,
 	)
 	return i, err
 }
 
 const createSession = `-- name: CreateSession :one
-INSERT INTO sessions (user_id, expires_at, next_task_at, work_context) VALUES ($1, $2, $3, $4) RETURNING id, user_id, mode, status, started_at, expires_at, ended_at, warnings, next_task_at, work_context
+INSERT INTO sessions (user_id, expires_at, next_task_at, work_context, learning_goal, duration_minutes) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, user_id, mode, status, started_at, expires_at, ended_at, warnings, next_task_at, work_context, learning_goal, duration_minutes, focused_step
 `
 
 type CreateSessionParams struct {
-	UserID      uuid.UUID
-	ExpiresAt   time.Time
-	NextTaskAt  *time.Time
-	WorkContext []byte
+	UserID          uuid.UUID
+	ExpiresAt       time.Time
+	NextTaskAt      *time.Time
+	WorkContext     []byte
+	LearningGoal    *string
+	DurationMinutes *int32
 }
 
 func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (Session, error) {
@@ -52,6 +71,8 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 		arg.ExpiresAt,
 		arg.NextTaskAt,
 		arg.WorkContext,
+		arg.LearningGoal,
+		arg.DurationMinutes,
 	)
 	var i Session
 	err := row.Scan(
@@ -65,12 +86,15 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 		&i.Warnings,
 		&i.NextTaskAt,
 		&i.WorkContext,
+		&i.LearningGoal,
+		&i.DurationMinutes,
+		&i.FocusedStep,
 	)
 	return i, err
 }
 
 const getActiveSessionForUser = `-- name: GetActiveSessionForUser :one
-SELECT id, user_id, mode, status, started_at, expires_at, ended_at, warnings, next_task_at, work_context FROM sessions WHERE user_id = $1 AND status = 'ACTIVE' LIMIT 1
+SELECT id, user_id, mode, status, started_at, expires_at, ended_at, warnings, next_task_at, work_context, learning_goal, duration_minutes, focused_step FROM sessions WHERE user_id = $1 AND status = 'ACTIVE' LIMIT 1
 `
 
 func (q *Queries) GetActiveSessionForUser(ctx context.Context, userID uuid.UUID) (Session, error) {
@@ -87,12 +111,15 @@ func (q *Queries) GetActiveSessionForUser(ctx context.Context, userID uuid.UUID)
 		&i.Warnings,
 		&i.NextTaskAt,
 		&i.WorkContext,
+		&i.LearningGoal,
+		&i.DurationMinutes,
+		&i.FocusedStep,
 	)
 	return i, err
 }
 
 const getSession = `-- name: GetSession :one
-SELECT id, user_id, mode, status, started_at, expires_at, ended_at, warnings, next_task_at, work_context FROM sessions WHERE id = $1
+SELECT id, user_id, mode, status, started_at, expires_at, ended_at, warnings, next_task_at, work_context, learning_goal, duration_minutes, focused_step FROM sessions WHERE id = $1
 `
 
 func (q *Queries) GetSession(ctx context.Context, id uuid.UUID) (Session, error) {
@@ -109,12 +136,15 @@ func (q *Queries) GetSession(ctx context.Context, id uuid.UUID) (Session, error)
 		&i.Warnings,
 		&i.NextTaskAt,
 		&i.WorkContext,
+		&i.LearningGoal,
+		&i.DurationMinutes,
+		&i.FocusedStep,
 	)
 	return i, err
 }
 
 const incrementSessionWarnings = `-- name: IncrementSessionWarnings :one
-UPDATE sessions SET warnings = warnings + 1 WHERE id = $1 RETURNING id, user_id, mode, status, started_at, expires_at, ended_at, warnings, next_task_at, work_context
+UPDATE sessions SET warnings = warnings + 1 WHERE id = $1 RETURNING id, user_id, mode, status, started_at, expires_at, ended_at, warnings, next_task_at, work_context, learning_goal, duration_minutes, focused_step
 `
 
 func (q *Queries) IncrementSessionWarnings(ctx context.Context, id uuid.UUID) (Session, error) {
@@ -131,12 +161,15 @@ func (q *Queries) IncrementSessionWarnings(ctx context.Context, id uuid.UUID) (S
 		&i.Warnings,
 		&i.NextTaskAt,
 		&i.WorkContext,
+		&i.LearningGoal,
+		&i.DurationMinutes,
+		&i.FocusedStep,
 	)
 	return i, err
 }
 
 const listActiveSessions = `-- name: ListActiveSessions :many
-SELECT id, user_id, mode, status, started_at, expires_at, ended_at, warnings, next_task_at, work_context FROM sessions WHERE status = 'ACTIVE'
+SELECT id, user_id, mode, status, started_at, expires_at, ended_at, warnings, next_task_at, work_context, learning_goal, duration_minutes, focused_step FROM sessions WHERE status = 'ACTIVE'
 `
 
 func (q *Queries) ListActiveSessions(ctx context.Context) ([]Session, error) {
@@ -159,6 +192,9 @@ func (q *Queries) ListActiveSessions(ctx context.Context) ([]Session, error) {
 			&i.Warnings,
 			&i.NextTaskAt,
 			&i.WorkContext,
+			&i.LearningGoal,
+			&i.DurationMinutes,
+			&i.FocusedStep,
 		); err != nil {
 			return nil, err
 		}
@@ -171,7 +207,7 @@ func (q *Queries) ListActiveSessions(ctx context.Context) ([]Session, error) {
 }
 
 const listSessionsForUser = `-- name: ListSessionsForUser :many
-SELECT id, user_id, mode, status, started_at, expires_at, ended_at, warnings, next_task_at, work_context FROM sessions WHERE user_id = $1 ORDER BY started_at DESC
+SELECT id, user_id, mode, status, started_at, expires_at, ended_at, warnings, next_task_at, work_context, learning_goal, duration_minutes, focused_step FROM sessions WHERE user_id = $1 ORDER BY started_at DESC
 `
 
 func (q *Queries) ListSessionsForUser(ctx context.Context, userID uuid.UUID) ([]Session, error) {
@@ -194,6 +230,9 @@ func (q *Queries) ListSessionsForUser(ctx context.Context, userID uuid.UUID) ([]
 			&i.Warnings,
 			&i.NextTaskAt,
 			&i.WorkContext,
+			&i.LearningGoal,
+			&i.DurationMinutes,
+			&i.FocusedStep,
 		); err != nil {
 			return nil, err
 		}
@@ -203,6 +242,31 @@ func (q *Queries) ListSessionsForUser(ctx context.Context, userID uuid.UUID) ([]
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockSession = `-- name: LockSession :one
+SELECT id, user_id, mode, status, started_at, expires_at, ended_at, warnings, next_task_at, work_context, learning_goal, duration_minutes, focused_step FROM sessions WHERE id=$1 FOR UPDATE
+`
+
+func (q *Queries) LockSession(ctx context.Context, id uuid.UUID) (Session, error) {
+	row := q.db.QueryRow(ctx, lockSession, id)
+	var i Session
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Mode,
+		&i.Status,
+		&i.StartedAt,
+		&i.ExpiresAt,
+		&i.EndedAt,
+		&i.Warnings,
+		&i.NextTaskAt,
+		&i.WorkContext,
+		&i.LearningGoal,
+		&i.DurationMinutes,
+		&i.FocusedStep,
+	)
+	return i, err
 }
 
 const setSessionNextTaskAt = `-- name: SetSessionNextTaskAt :exec

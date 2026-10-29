@@ -172,3 +172,9 @@ make smoke   # in another shell
 
 The smoke test registers a user, starts a session, subscribes over WS, DMs Sarah and checks the streamed reply, waits for a
 surprise task and a deadline expiry warning, ends the session and polls the evaluation until it is DONE.
+
+## Focused writing sessions
+
+`POST /api/sessions` accepts optional `durationMinutes` (10, 20 or 60) and `learningGoal` (`STATUS_UPDATE`, `CLARIFY_REQUIREMENTS`, `REQUEST_EXTENSION`, `POLITE_PUSHBACK`, `INCIDENT_UPDATE`). Omitted duration preserves `SESSION_DURATION` exactly; omitted goal preserves simulation. Focused setup/task injection is static, without model calls, with 2 tasks for durations <=10m and 3 otherwise. Learner turns use one coverage judge and one responder, without deadlines or ghosting warnings. Explicit session-end evaluation remains a separate model cost and retains partial feedback/retry semantics.
+
+Against an isolated test server, `/usr/local/go/bin/go run ./scripts/smoke -focused` checks focused metadata, static tasks and the absence of deadlines without posting learner turns. Use `-duration-minutes=10` to override the configured duration. The default smoke command keeps its no-payload simulation lifecycle. Automated integration tests only accept `TEST_DATABASE_URL=postgres://worklingo:worklingo@localhost:5433/worklingo_codex_20261029?sslmode=disable`.

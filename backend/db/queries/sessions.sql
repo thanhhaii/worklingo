@@ -1,5 +1,5 @@
 -- name: CreateSession :one
-INSERT INTO sessions (user_id, expires_at, next_task_at, work_context) VALUES ($1, $2, $3, $4) RETURNING *;
+INSERT INTO sessions (user_id, expires_at, next_task_at, work_context, learning_goal, duration_minutes) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *;
 
 -- name: GetSession :one
 SELECT * FROM sessions WHERE id = $1;
@@ -22,3 +22,9 @@ UPDATE sessions SET warnings = warnings + 1 WHERE id = $1 RETURNING *;
 
 -- name: SetSessionNextTaskAt :exec
 UPDATE sessions SET next_task_at = $2 WHERE id = $1;
+
+-- name: LockSession :one
+SELECT * FROM sessions WHERE id=$1 FOR UPDATE;
+
+-- name: AdvanceFocusedSession :exec
+UPDATE sessions SET focused_step=focused_step+1,next_task_at=$2 WHERE id=$1;

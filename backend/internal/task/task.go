@@ -62,6 +62,10 @@ func (s *Service) OnUserMessage(ch store.Channel, user store.User, m store.Messa
 	}()
 }
 
+func (s *Service) focused(ctx context.Context, id uuid.UUID) bool {
+	sess, err := s.q.GetSession(ctx, id)
+	return err == nil && sess.LearningGoal != nil
+}
 func (s *Service) process(ctx context.Context, ch store.Channel, user store.User, m store.Message) {
 	cands, err := s.candidates(ctx, m)
 	if err != nil {
@@ -69,7 +73,9 @@ func (s *Service) process(ctx context.Context, ch store.Channel, user store.User
 	}
 	if len(cands) == 0 {
 		// No Task involved: deadline validation and the persona reply, as before.
-		go s.deadlines.ValidateReply(ctx, m)
+		if !s.focused(ctx, m.SessionID) {
+			go s.deadlines.ValidateReply(ctx, m)
+		}
 		s.engine.OnUserMessage(ctx, ch, user, m)
 		return
 	}
@@ -96,7 +102,11 @@ func (s *Service) candidates(ctx context.Context, m store.Message) ([]store.Task
 			hasPending[p.TaskID] = true
 		}
 	}
-	return SelectCandidates(tasks, hasPending, m), nil
+	cands := SelectCandidates(tasks, hasPending, m)
+	if s.focused(ctx, m.SessionID) && len(cands) > 1 {
+		cands = cands[len(cands)-1:]
+	}
+	return cands, nil
 }
 
 // SelectCandidates picks the tasks a user message may cover: same channel, not
@@ -134,12 +144,12 @@ func (s *Service) judgeAndUpdate(ctx context.Context, m store.Message, cands []s
 		wc = dto.ParseWorkContext(sess.WorkContext)
 	}
 
+	focused := s.focused(ctx, m.SessionID)
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		s.deadlines.ValidateReply(ctx, m)
-	}()
+	if !focused {
+		wg.Add(1)
+		go func() { defer wg.Done(); s.deadlines.ValidateReply(ctx, m) }()
+	}
 	verdicts := make([]map[int]Verdict, len(cands))
 	for i, t := range cands {
 		wg.Add(1)
@@ -153,6 +163,9 @@ func (s *Service) judgeAndUpdate(ctx context.Context, m store.Message, cands []s
 	var followUp *store.Task
 	for i, t := range cands {
 		s.apply(ctx, t, m, verdicts[i])
+		if focused && len(verdicts[i]) > 0 && t.Status == "OPEN" {
+			_, _ = s.q.AcknowledgeTask(ctx, t.ID)
+		}
 		cur, err := s.q.GetTask(ctx, t.ID)
 		if err != nil {
 			continue
@@ -302,8 +315,10 @@ func (s *Service) sendFollowUp(ctx context.Context, ch store.Channel, user store
 	if !ok {
 		return msg.ID != uuid.Nil // a message was posted (offline placeholder): do not double-reply
 	}
-	if _, err := s.deadlines.Create(ctx, t.SessionID, t.ChannelID, msg.ID, &t.ID); err != nil {
-		s.log.Error("create follow-up deadline", "task", t.ID, "err", err)
+	if !s.focused(ctx, t.SessionID) {
+		if _, err := s.deadlines.Create(ctx, t.SessionID, t.ChannelID, msg.ID, &t.ID); err != nil {
+			s.log.Error("create follow-up deadline", "task", t.ID, "err", err)
+		}
 	}
 	s.log.Info("task follow-up sent", "task", t.ID, "pending", len(pendingOf(pts)))
 	return true

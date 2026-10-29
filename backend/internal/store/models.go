@@ -63,16 +63,19 @@ type Message struct {
 }
 
 type Session struct {
-	ID          uuid.UUID
-	UserID      uuid.UUID
-	Mode        string
-	Status      string
-	StartedAt   time.Time
-	ExpiresAt   time.Time
-	EndedAt     *time.Time
-	Warnings    int32
-	NextTaskAt  *time.Time
-	WorkContext []byte
+	ID              uuid.UUID
+	UserID          uuid.UUID
+	Mode            string
+	Status          string
+	StartedAt       time.Time
+	ExpiresAt       time.Time
+	EndedAt         *time.Time
+	Warnings        int32
+	NextTaskAt      *time.Time
+	WorkContext     []byte
+	LearningGoal    *string
+	DurationMinutes *int32
+	FocusedStep     int32
 }
 
 type TalkingPoint struct {

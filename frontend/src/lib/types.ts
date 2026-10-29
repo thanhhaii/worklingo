@@ -10,6 +10,9 @@ export type Persona = {
   avatarColor: string;
 };
 
+export type LearningGoal = "STATUS_UPDATE" | "CLARIFY_REQUIREMENTS" | "REQUEST_EXTENSION" | "POLITE_PUSHBACK" | "INCIDENT_UPDATE";
+export type CreateSessionOptions = { durationMinutes?: 10 | 20 | 60; learningGoal?: LearningGoal };
+
 export type SessionStatus = "ACTIVE" | "COMPLETED" | "ABORTED";
 
 export type WorkContext = {
@@ -22,6 +25,8 @@ export type WorkContext = {
 };
 
 export type Session = {
+  learningGoal: LearningGoal | null;
+  durationMinutes: 10 | 20 | 60 | null;
   id: string;
   mode: "AI_SOLO";
   status: SessionStatus;

@@ -1,6 +1,7 @@
 import { API_URL, MOCK } from "./config";
 import type {
   AuthResponse,
+  CreateSessionOptions,
   Evaluation,
   Message,
   Persona,
@@ -100,7 +101,7 @@ export const api = {
   login: (email: string, password: string) => request<AuthResponse>("POST", "/auth/login", { email, password }),
   me: () => request<User>("GET", "/me"),
   personas: () => request<Persona[]>("GET", "/personas"),
-  createSession: () => request<Session>("POST", "/sessions", {}),
+  createSession: (options: CreateSessionOptions = {}) => request<Session>("POST", "/sessions", options),
   activeSession: async (): Promise<Session | null> => {
     try {
       return await request<Session>("GET", "/sessions/active");

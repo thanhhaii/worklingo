@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/mail"
@@ -169,7 +170,16 @@ func (h *Handlers) CreateSession(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s, err := h.Sessions.Create(r.Context(), u)
+	var options session.CreateOptions
+	if err := decode(r, &options); err != nil && !errors.Is(err, io.EOF) {
+		Error(w, http.StatusBadRequest, "bad_request", "invalid session options")
+		return
+	}
+	if _, err := session.ResolveOptions(options, time.Hour); err != nil {
+		Error(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	s, err := h.Sessions.Create(r.Context(), u, options)
 	if errors.Is(err, session.ErrActiveExists) {
 		Error(w, http.StatusConflict, "active_session_exists", "you already have an active session")
 		return

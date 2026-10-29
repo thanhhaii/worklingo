@@ -94,7 +94,7 @@ func (s *Service) reviewBatch(ctx context.Context, d *sessionData, batch []store
 	defer cancel()
 	temp := 0.1
 	if err := llm.CompleteJSON(cctx, s.llm, llm.Request{Model: s.model, MaxTokens: 8000, Temperature: &temp,
-		Messages: []llm.Message{{Role: llm.RoleUser, Content: fmt.Sprintf(messageReviewPrompt, strings.TrimSpace(sb.String()))}}}, &out); err != nil {
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: fmt.Sprintf(messageReviewPrompt, strings.TrimSpace(sb.String())) + "\n" + d.goalContext}}}, &out); err != nil {
 		return nil, err
 	}
 	res := map[uuid.UUID][]rawIssue{}
@@ -200,7 +200,7 @@ func (s *Service) reviewTasks(ctx context.Context, d *sessionData, skipLLM bool)
 		cctx, cancel := context.WithTimeout(ctx, 150*time.Second)
 		temp := 0.3
 		err := llm.CompleteJSON(cctx, s.llm, llm.Request{Model: s.model, MaxTokens: 6000, Temperature: &temp,
-			Messages: []llm.Message{{Role: llm.RoleUser, Content: fmt.Sprintf(taskReviewPrompt, strings.TrimSpace(sb.String()))}}}, &out)
+			Messages: []llm.Message{{Role: llm.RoleUser, Content: fmt.Sprintf(taskReviewPrompt, strings.TrimSpace(sb.String())) + "\n" + d.goalContext}}}, &out)
 		cancel()
 		if err != nil {
 			s.log.Warn("task review failed, using empty reviews", "err", err)

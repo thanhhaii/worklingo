@@ -1,6 +1,6 @@
 # WorkLingo
 
-**WorkLingo** is a Slack-style workplace simulator for practicing **Business English**. You join a 60-minute "work shift" with 3 AI teammates, answer messages, handle surprise tasks with deadlines, and get an evaluation of your English when the session ends.
+**WorkLingo** is a Slack-style workplace simulator for practicing **Business English**. Choose 10, 20 or 60 minutes of focused writing practice or a full workplace simulation with 3 AI teammates. Answer tasks and get an evaluation of your English when the session ends.
 
 > Current mode: **AI-Solo** (1 user + 3 AI personas). This is a personal-use project.
 
@@ -16,6 +16,7 @@
   | David Miller | `@client_david` | Client (UK) |
 
 - **Real-time streamed replies** over WebSocket (`typing` → `message.delta` → `message.done`).
+- **Focused writing practice**: status updates, clarifying requirements, requesting extensions, polite pushback and incident updates. Two tasks in 10 minutes or three in 20/60 minutes, relaxed timing, no ghosting warnings, and deterministic setup with zero model calls. Dashboard defaults to 10-minute status practice; full simulation stays selectable.
 - **Surprise tasks and deadlines**: the server generates unexpected tasks. If you don't reply in time, you get a **warning** for ghosting.
 - **Reply validation**: your replies are checked (heuristic + LLM) to see whether they actually address the request. If they don't, a hint is posted in the thread.
 - **End-of-session evaluation**: an evaluation model scores your English communication and gives feedback on a report page.

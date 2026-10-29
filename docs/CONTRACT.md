@@ -23,11 +23,16 @@ type User = { id: string; username: string; email: string; createdAt: string }
 
 type Persona = { id: string; handle: string; displayName: string; role: string; avatarColor: string }
 
+type LearningGoal = "STATUS_UPDATE" | "CLARIFY_REQUIREMENTS" | "REQUEST_EXTENSION" | "POLITE_PUSHBACK" | "INCIDENT_UPDATE";
+type CreateSessionOptions = { durationMinutes?: 10 | 20 | 60; learningGoal?: LearningGoal };
+
 type Session = {
   id: string; mode: "AI_SOLO"; status: "ACTIVE" | "COMPLETED" | "ABORTED";
   startedAt: string; expiresAt: string; endedAt: string | null;
+  learningGoal: LearningGoal | null; // null = full simulation
+  durationMinutes: 10 | 20 | 60 | null; // null = configured SESSION_DURATION used
   warnings: number;            // ghosting warnings count
-  workContext: WorkContext | null; // generated once per session (null for old sessions)
+  workContext: WorkContext | null; // deterministic in focused sessions, generated in simulation (null for old sessions)
 }
 
 type WorkContext = {           // fictional project situation; Vietnamese (proper names may stay English)
@@ -60,7 +65,7 @@ type Task = {
   id: string; sessionId: string; channelId: string; messageId: string; // message that announced the task
   personaId: string; title: string;
   priority: "NORMAL" | "CRITICAL";
-  status: "OPEN" | "ACKNOWLEDGED" | "DONE";  // ACKNOWLEDGED = deadline resolved; DONE = all talking points covered
+  status: "OPEN" | "ACKNOWLEDGED" | "DONE";  // ACKNOWLEDGED = deadline resolved or focused attempt judged; DONE = all talking points covered
   createdAt: string;
   talkingPoints: TalkingPoint[];             // ordered by position, 1-3
 }
@@ -145,7 +150,7 @@ Evaluation availability:
 | POST | `/auth/login` | `{email,password}` | `{ token, user }` |
 | GET | `/me` | – | `User` |
 | GET | `/personas` | – | `Persona[]` |
-| POST | `/sessions` | `{}` | `Session` (creates 4 channels + 3 DMs, persona greeting kicks off). 409 if user already has ACTIVE session. |
+| POST | `/sessions` | `CreateSessionOptions` (or `{}` / empty body) | `Session` (creates 4 channels + 3 DMs; focused static task or simulation greeting). 400 for invalid/null/type-mismatched options. 409 if user already has ACTIVE session. |
 | GET | `/sessions/active` | – | `Session` or 404 |
 | GET | `/sessions` | – | `Session[]` (history, newest first) |
 | GET | `/sessions/{id}` | – | `{ session, channels: Channel[], tasks: Task[], deadlines: Deadline[], warnings: Warning[] }` |
@@ -184,7 +189,11 @@ After connecting, client sends `subscribe` for the session it is viewing.
 | `error` | `{ code, message }` |
 
 ## Game rules (backend-enforced)
-- Session lasts 60 minutes (`SESSION_DURATION`, configurable). On expiry → COMPLETED + evaluation.
+- Omitted duration uses `SESSION_DURATION` exactly (default 60m, including seconds-long smoke overrides); an explicit `durationMinutes` of 10, 20 or 60 overrides it. `expiresAt` is the countdown authority. On expiry → COMPLETED + evaluation.
+- Supplying `learningGoal` selects focused practice; omitting it preserves full simulation, including for an explicit short duration. Invalid goals, null options, non-integer/unsupported durations are 400 errors before provider work. Legacy metadata is exposed as null.
+- Focused practice uses deterministic work facts and three prewritten templates per goal, delivering at most two tasks for actual durations <=10m and three otherwise. Initial context and task injection make zero model calls. The first task is due after min(1.5s, duration/20); subsequent tasks use absolute offsets evenly spaced over the session. Task/message/points, private step and next due time commit in one transaction. Recovery never replays committed tasks and spaces overdue catch-up tasks by at least 1.5s; exhausted and expired sessions generate no tasks.
+- Focused sessions have no response deadlines or ghosting warnings. Reply in each task’s thread. Exactly one responder is selected: parent persona, first recognized mention, newest channel task persona, DM persona, then goal default. A turn uses at most one coverage judge and one streamed reply/follow-up, without responder classification, request detection, or deadline validation. Focused evaluation sees the goal and facts, keeps the same score shape/weights and retry contracts, and does not penalize response speed or professional pushback/clarification.
+- The remaining rules below apply to full simulation:
 - Personas reply when the user posts in a channel/DM (DM → that persona; channel → @mentioned persona(s), else the most relevant persona, may be none in #watercooler).
 - Surprise tasks: during the session, a persona drops a task in a channel at random intervals (config `TASK_MIN_INTERVAL`/`TASK_MAX_INTERVAL`, default 6–12 min, first one ~2 min after start). Each task creates a Deadline.
 - Persona messages that explicitly @mention the user with a question/request also create a Deadline.

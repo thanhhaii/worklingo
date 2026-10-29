@@ -18,6 +18,7 @@ import (
 	"github.com/worklingo/backend/internal/deadline"
 	"github.com/worklingo/backend/internal/dto"
 	"github.com/worklingo/backend/internal/evaluation"
+	"github.com/worklingo/backend/internal/focus"
 	"github.com/worklingo/backend/internal/lifecycle"
 	"github.com/worklingo/backend/internal/persona"
 	"github.com/worklingo/backend/internal/scenario"
@@ -55,17 +56,37 @@ func NewManager(pool *pgxpool.Pool, q *store.Queries, reg *lifecycle.Registry, e
 }
 
 // Create starts a new session with channels, DMs and a greeting.
-func (m *Manager) Create(ctx context.Context, user store.User) (store.Session, error) {
+func (m *Manager) Create(ctx context.Context, user store.User, options ...CreateOptions) (store.Session, error) {
+	var o CreateOptions
+	if len(options) > 0 {
+		o = options[0]
+	}
+	duration, err := ResolveOptions(o, m.duration)
+	if err != nil {
+		return store.Session{}, err
+	}
 	now := time.Now()
 	first := m.scheduler.FirstAt(now)
 	// Generate the work context before the transaction (LLM call; falls back to static).
-	wcRaw, _ := json.Marshal(m.wctx.Generate(ctx))
+	var wc dto.WorkContext
+	if o.LearningGoal != nil {
+		wc = focus.Context(*o.LearningGoal)
+		first = now.Add(focus.FirstOffset(duration))
+	} else {
+		wc = m.wctx.Generate(ctx)
+	}
+	wcRaw, _ := json.Marshal(wc)
+	var minutes *int32
+	if o.DurationMinutes != nil {
+		v := int32(*o.DurationMinutes)
+		minutes = &v
+	}
 	var sess store.Session
 	var general store.Channel
-	err := pgx.BeginFunc(ctx, m.pool, func(tx pgx.Tx) error {
+	err = pgx.BeginFunc(ctx, m.pool, func(tx pgx.Tx) error {
 		q := m.q.WithTx(tx)
 		var err error
-		sess, err = q.CreateSession(ctx, store.CreateSessionParams{UserID: user.ID, ExpiresAt: now.Add(m.duration), NextTaskAt: &first, WorkContext: wcRaw})
+		sess, err = q.CreateSession(ctx, store.CreateSessionParams{UserID: user.ID, ExpiresAt: now.Add(duration), NextTaskAt: &first, WorkContext: wcRaw, LearningGoal: o.LearningGoal, DurationMinutes: minutes})
 		if err != nil {
 			var pe *pgconn.PgError
 			if errors.As(err, &pe) && pe.Code == "23505" {
@@ -98,6 +119,9 @@ func (m *Manager) Create(ctx context.Context, user store.User) (store.Session, e
 	}
 	sctx := m.activate(sess)
 
+	if o.LearningGoal != nil {
+		return sess, nil
+	}
 	// Greeting from Sarah in #general.
 	go func() {
 		time.Sleep(1500 * time.Millisecond) // give the client a moment to subscribe

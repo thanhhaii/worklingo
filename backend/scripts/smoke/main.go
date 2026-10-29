@@ -22,6 +22,9 @@ import (
 	"github.com/coder/websocket"
 )
 
+var focused = flag.Bool("focused", false, "check static focused setup without paid chat turns")
+var durationMinutes = flag.Int("duration-minutes", 0, "focused duration: 10, 20 or 60; zero keeps SESSION_DURATION")
+
 var base = flag.String("base", "http://localhost:8080", "backend base URL")
 
 type env struct {
@@ -83,6 +86,11 @@ func main() {
 	tok := auth.Token
 	call("GET", "/me", tok, nil, nil)
 	call("GET", "/personas", tok, nil, nil)
+
+	if *focused {
+		focusedSmoke(tok)
+		return
+	}
 
 	var sess struct{ ID string }
 	if call("POST", "/sessions", tok, map[string]any{}, &sess) != 201 {
@@ -210,4 +218,52 @@ loop:
 		os.Exit(1)
 	}
 	fmt.Println("SMOKE PASSED")
+}
+
+// focusedSmoke keeps the existing no-payload simulation smoke path intact.
+func focusedSmoke(token string) {
+	options := map[string]any{"learningGoal": "STATUS_UPDATE"}
+	if *durationMinutes != 0 {
+		options["durationMinutes"] = *durationMinutes
+	}
+	var sess struct {
+		ID                   string
+		LearningGoal         *string
+		DurationMinutes      *int
+		StartedAt, ExpiresAt time.Time
+	}
+	if call("POST", "/sessions", token, options, &sess) != 201 {
+		os.Exit(1)
+	}
+	defer call("POST", "/sessions/"+sess.ID+"/end", token, nil, nil)
+	if sess.LearningGoal == nil || *sess.LearningGoal != "STATUS_UPDATE" {
+		must(fmt.Errorf("missing goal"), "focused metadata")
+	}
+	limit := 3
+	if sess.ExpiresAt.Sub(sess.StartedAt) <= 10*time.Minute {
+		limit = 2
+	}
+	var detail struct {
+		Tasks []struct {
+			Title         string
+			TalkingPoints []json.RawMessage
+		}
+		Deadlines, Warnings []json.RawMessage
+	}
+	for i := 0; i < 40; i++ {
+		call("GET", "/sessions/"+sess.ID, token, nil, &detail)
+		if len(detail.Tasks) > 0 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if len(detail.Tasks) == 0 || len(detail.Tasks) > limit || len(detail.Deadlines) != 0 || len(detail.Warnings) != 0 {
+		must(fmt.Errorf("tasks=%d deadlines=%d warnings=%d", len(detail.Tasks), len(detail.Deadlines), len(detail.Warnings)), "focused static tasks")
+	}
+	for _, task := range detail.Tasks {
+		if len(task.TalkingPoints) == 0 {
+			must(fmt.Errorf("missing talking points"), "focused task")
+		}
+	}
+	fmt.Println("FOCUSED SMOKE PASSED (static setup, metadata, task bounds, no deadlines)")
 }

@@ -32,7 +32,9 @@ pnpm dev                        # http://localhost:3000
 NEXT_PUBLIC_MOCK=1 pnpm dev
 ```
 
-Register any account (stored in `localStorage`), start a session, and the fake server will:
+Register any account (stored in `localStorage`). The dashboard defaults to 10-minute focused status practice. Choose among five writing goals and 10/20/60 minutes; focused sessions use static facts/tasks, preserve progress and next due time across reloads, and never create deadlines. Feedback is canned sample data in mock mode.
+
+Choose **Full simulation** to exercise the legacy fake server, which will:
 
 - stream a greeting from Sarah in #general (~2s) and a code-heavy message from Alex in #sprint-planning (~6s)
 - drop a **CRITICAL task** in #incident-room at ~15s, with a 5-minute deadline
