@@ -20,6 +20,7 @@ import (
 	"github.com/worklingo/backend/internal/chat"
 	"github.com/worklingo/backend/internal/deadline"
 	"github.com/worklingo/backend/internal/dto"
+	"github.com/worklingo/backend/internal/evaluation"
 	"github.com/worklingo/backend/internal/lifecycle"
 	"github.com/worklingo/backend/internal/persona"
 	"github.com/worklingo/backend/internal/session"
@@ -28,15 +29,16 @@ import (
 )
 
 type Handlers struct {
-	Q         *store.Queries
-	JWT       *auth.JWT
-	Sessions  *session.Manager
-	Chat      *chat.Service
-	Engine    *persona.Engine
-	Deadlines *deadline.Service
-	Tasks     *task.Service
-	Registry  *lifecycle.Registry
-	Log       *slog.Logger
+	Q           *store.Queries
+	Evaluations *evaluation.Service
+	JWT         *auth.JWT
+	Sessions    *session.Manager
+	Chat        *chat.Service
+	Engine      *persona.Engine
+	Deadlines   *deadline.Service
+	Tasks       *task.Service
+	Registry    *lifecycle.Registry
+	Log         *slog.Logger
 }
 
 var usernameRe = regexp.MustCompile(`^[A-Za-z0-9_]{3,32}$`)
@@ -284,6 +286,28 @@ func (h *Handlers) Evaluation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	JSON(w, http.StatusOK, dto.FromEvaluation(e))
+}
+
+// RetryEvaluation reuses the same ownership check as every session endpoint.
+func (h *Handlers) RetryEvaluation(w http.ResponseWriter, r *http.Request) {
+	sess, ok := h.loadSession(w, r)
+	if !ok {
+		return
+	}
+	if sess.Status == "ACTIVE" {
+		Error(w, http.StatusConflict, "evaluation_conflict", "End the session before retrying its evaluation.")
+		return
+	}
+	out, err := h.Evaluations.Retry(r.Context(), sess.ID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		Error(w, http.StatusConflict, "evaluation_conflict", "The evaluation is already running, complete, or has not started.")
+		return
+	}
+	if err != nil {
+		h.internal(w, err)
+		return
+	}
+	JSON(w, http.StatusAccepted, out)
 }
 
 // ---- messages ----

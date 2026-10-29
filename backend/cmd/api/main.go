@@ -123,7 +123,7 @@ func run() error {
 
 	jwt := auth.NewJWT(cfg.JWTSecret, cfg.JWTTTL)
 	router := apihttp.NewRouter(apihttp.Deps{
-		H:   &handlers.Handlers{Q: q, JWT: jwt, Sessions: sessions, Chat: chatSvc, Engine: engine, Deadlines: deadlines, Tasks: tasks, Registry: reg, Log: log},
+		H:   &handlers.Handlers{Q: q, JWT: jwt, Evaluations: evalSvc, Sessions: sessions, Chat: chatSvc, Engine: engine, Deadlines: deadlines, Tasks: tasks, Registry: reg, Log: log},
 		Hub: hub, JWT: jwt, CORSOrigin: cfg.CORSOrigin, Log: log,
 	})
 	srv := &http.Server{Addr: ":" + cfg.Port, Handler: router, ReadHeaderTimeout: 10 * time.Second}
@@ -153,6 +153,7 @@ func run() error {
 
 func newLLMProvider(profile config.LLMProfile, timeout time.Duration) *llm.OpenAICompat {
 	provider := llm.NewOpenAICompat(profile.BaseURL, profile.APIKey, timeout)
+	provider.ProviderName = profile.Provider
 	if profile.Provider == "gemini" {
 		provider.ReasoningEffort = "minimal"
 	}

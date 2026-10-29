@@ -150,6 +150,7 @@ type MessageIssue struct {
 }
 
 type MessageReview struct {
+	ReviewStatus string         `json:"reviewStatus"`
 	MessageID    string         `json:"messageId"`
 	ChannelLabel string         `json:"channelLabel"`
 	Content      string         `json:"content"`
@@ -167,6 +168,7 @@ type TalkingPointReview struct {
 }
 
 type TaskReview struct {
+	ReviewStatus  string               `json:"reviewStatus"`
 	TaskID        string               `json:"taskId"`
 	Title         string               `json:"title"`
 	PersonaID     string               `json:"personaId"`
@@ -175,17 +177,20 @@ type TaskReview struct {
 }
 
 type Evaluation struct {
-	ID             string          `json:"id"`
-	SessionID      string          `json:"sessionId"`
-	Status         string          `json:"status"`
-	Grammar        int             `json:"grammar"`
-	Tone           int             `json:"tone"`
-	Vocabulary     int             `json:"vocabulary"`
-	Overall        int             `json:"overall"`
-	Summary        string          `json:"summary"`
-	CreatedAt      time.Time       `json:"createdAt"`
-	MessageReviews []MessageReview `json:"messageReviews"`
-	TaskReviews    []TaskReview    `json:"taskReviews"`
+	ScoreStatus         string          `json:"scoreStatus"`
+	MessageReviewStatus string          `json:"messageReviewStatus"`
+	TaskReviewStatus    string          `json:"taskReviewStatus"`
+	ID                  string          `json:"id"`
+	SessionID           string          `json:"sessionId"`
+	Status              string          `json:"status"`
+	Grammar             int             `json:"grammar"`
+	Tone                int             `json:"tone"`
+	Vocabulary          int             `json:"vocabulary"`
+	Overall             int             `json:"overall"`
+	Summary             string          `json:"summary"`
+	CreatedAt           time.Time       `json:"createdAt"`
+	MessageReviews      []MessageReview `json:"messageReviews"`
+	TaskReviews         []TaskReview    `json:"taskReviews"`
 }
 
 type SessionDetail struct {
@@ -298,6 +303,7 @@ func FromWarning(w store.Warning) Warning {
 func FromEvaluation(e store.Evaluation) Evaluation {
 	out := Evaluation{
 		ID: e.ID.String(), SessionID: e.SessionID.String(), Status: e.Status,
+		ScoreStatus: e.ScoreStatus, MessageReviewStatus: e.MessageReviewStatus, TaskReviewStatus: e.TaskReviewStatus,
 		Grammar: int(e.Grammar), Tone: int(e.Tone), Vocabulary: int(e.Vocabulary), Overall: int(e.Overall),
 		Summary: e.Summary, CreatedAt: utc(e.CreatedAt), MessageReviews: []MessageReview{}, TaskReviews: []TaskReview{},
 	}
@@ -311,6 +317,9 @@ func FromEvaluation(e store.Evaluation) Evaluation {
 		out.MessageReviews = []MessageReview{}
 	}
 	for i := range out.MessageReviews {
+		if out.MessageReviews[i].ReviewStatus != "AVAILABLE" {
+			out.MessageReviews[i].ReviewStatus = "UNAVAILABLE"
+		}
 		if out.MessageReviews[i].Issues == nil {
 			out.MessageReviews[i].Issues = []MessageIssue{}
 		}
@@ -319,9 +328,24 @@ func FromEvaluation(e store.Evaluation) Evaluation {
 		out.TaskReviews = []TaskReview{}
 	}
 	for i := range out.TaskReviews {
+		if out.TaskReviews[i].ReviewStatus != "AVAILABLE" {
+			out.TaskReviews[i].ReviewStatus = "UNAVAILABLE"
+		}
 		if out.TaskReviews[i].TalkingPoints == nil {
 			out.TaskReviews[i].TalkingPoints = []TalkingPointReview{}
 		}
+	}
+	if out.ScoreStatus != "AVAILABLE" {
+		out.ScoreStatus = "UNAVAILABLE"
+	}
+	if out.MessageReviewStatus != "AVAILABLE" {
+		out.MessageReviewStatus = "UNAVAILABLE"
+	}
+	if out.TaskReviewStatus != "AVAILABLE" {
+		out.TaskReviewStatus = "UNAVAILABLE"
+	}
+	if out.Status == "DONE" && (out.MessageReviewStatus != "AVAILABLE" || out.TaskReviewStatus != "AVAILABLE") {
+		out.Status = "PARTIAL"
 	}
 	return out
 }

@@ -62,7 +62,20 @@ function load(): DB {
   if (typeof window === "undefined") return emptyDb();
   try {
     const raw = window.localStorage.getItem(STORE_KEY);
-    if (raw) return { ...emptyDb(), ...(JSON.parse(raw) as DB) };
+    if (raw) {
+      const loaded = { ...emptyDb(), ...(JSON.parse(raw) as DB) };
+      for (const ev of loaded.evaluations) {
+        ev.scoreStatus ??= ev.status === "DONE" || ev.status === "PARTIAL" ? "AVAILABLE" : "UNAVAILABLE";
+        ev.messageReviewStatus ??= "UNAVAILABLE";
+        ev.taskReviewStatus ??= "UNAVAILABLE";
+        ev.messageReviews ??= [];
+        ev.taskReviews ??= [];
+        for (const r of ev.messageReviews) r.reviewStatus ??= "UNAVAILABLE";
+        for (const r of ev.taskReviews) r.reviewStatus ??= "UNAVAILABLE";
+        if (ev.status === "DONE" && (ev.messageReviewStatus !== "AVAILABLE" || ev.taskReviewStatus !== "AVAILABLE")) ev.status = "PARTIAL";
+      }
+      return loaded;
+    }
   } catch {
     // ignore
   }
@@ -560,6 +573,9 @@ function finishSession(sessionId: string): Session | null {
       id: uuid(),
       sessionId,
       status: "PENDING",
+      scoreStatus: "UNAVAILABLE",
+      messageReviewStatus: "UNAVAILABLE",
+      taskReviewStatus: "UNAVAILABLE",
       grammar: 0,
       tone: 0,
       vocabulary: 0,
@@ -584,18 +600,23 @@ function completeEvaluation(sessionId: string) {
   if (!ev || !s) return;
   const userMsgs = db.messages.filter((m) => m.sessionId === sessionId && m.authorType === "USER");
   const penalty = s.warnings * 5;
-  ev.status = "DONE";
-  ev.grammar = Math.max(0, 78 - penalty);
-  ev.tone = Math.max(0, 84 - penalty * 2);
-  ev.vocabulary = Math.max(0, 71 - penalty);
-  ev.overall = Math.round((ev.grammar + ev.tone + ev.vocabulary) / 3);
-  ev.summary =
-    `You sent ${userMsgs.length} message(s) and received ${s.warnings} ghosting warning(s). ` +
-    "Your tone was generally polite and collaborative. Focus on article usage (a/the) and on using more precise business vocabulary when giving status updates. " +
-    "When a stakeholder asks a direct question, acknowledge it quickly before giving a full answer.";
+  if (ev.scoreStatus !== "AVAILABLE") {
+    ev.grammar = Math.max(0, 78 - penalty);
+    ev.tone = Math.max(0, 84 - penalty * 2);
+    ev.vocabulary = Math.max(0, 71 - penalty);
+    ev.overall = Math.round((ev.grammar + ev.tone + ev.vocabulary) / 3);
+    ev.summary =
+      `You sent ${userMsgs.length} message(s) and received ${s.warnings} ghosting warning(s). ` +
+      "Your tone was generally polite and collaborative. Focus on article usage (a/the) and on using more precise business vocabulary when giving status updates. " +
+      "When a stakeholder asks a direct question, acknowledge it quickly before giving a full answer.";
+    ev.scoreStatus = "AVAILABLE";
+  }
+  const priorMessages = new Map((ev.messageReviews ?? []).filter((r) => r.reviewStatus === "AVAILABLE").map((r) => [r.messageId, r]));
   ev.messageReviews = userMsgs
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
     .map((m, idx): MessageReview => {
+      const retained = priorMessages.get(m.id);
+      if (retained) return retained;
       const ch = db.channels.find((c) => c.id === m.channelId);
       const channelLabel =
         ch?.kind === "DM"
@@ -621,18 +642,22 @@ function completeEvaluation(sessionId: string) {
           severity: "MINOR",
         });
       }
-      return { messageId: m.id, channelLabel, content: m.content, createdAt: m.createdAt, issues };
+      return { messageId: m.id, reviewStatus: "AVAILABLE", channelLabel, content: m.content, createdAt: m.createdAt, issues };
     });
+  const priorTasks = new Map((ev.taskReviews ?? []).filter((r) => r.reviewStatus === "AVAILABLE").map((r) => [r.taskId, r]));
   ev.taskReviews = db.tasks
     .filter((t) => t.sessionId === sessionId)
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
     .map((t): TaskReview => {
+      const retained = priorTasks.get(t.id);
+      if (retained) return retained;
       const replies = userMsgs.filter(
         (m) => m.channelId === t.channelId && m.createdAt > t.createdAt && (!m.parentId || m.parentId === t.messageId),
       );
       let ri = 0;
       return {
         taskId: t.id,
+        reviewStatus: "AVAILABLE",
         title: t.title,
         personaId: t.personaId,
         status: t.status,
@@ -652,6 +677,9 @@ function completeEvaluation(sessionId: string) {
         }),
       };
     });
+  ev.messageReviewStatus = "AVAILABLE";
+  ev.taskReviewStatus = "AVAILABLE";
+  ev.status = "DONE";
   save();
   emit(sessionId, { type: "evaluation.updated", data: ev });
 }
@@ -780,7 +808,17 @@ async function handle(req: HttpRequest): Promise<HttpResponse> {
         warnings: db.warnings.filter((w) => w.sessionId === s.id),
       });
     if (p[2] === "end" && M === "POST") return ok(finishSession(s.id));
-    if (p[2] === "evaluation" && M === "GET") {
+    if (p[2] === "evaluation" && p[3] === "retry" && p.length === 4 && M === "POST") {
+      const ev = db.evaluations.find((e) => e.sessionId === s.id);
+      if (s.status === "ACTIVE" || !ev || (ev.status !== "FAILED" && ev.status !== "PARTIAL"))
+        return err(409, "evaluation_conflict", "The evaluation is already running, complete, or has not started.");
+      ev.status = "PENDING";
+      save();
+      emit(s.id, { type: "evaluation.updated", data: ev });
+      setTimeout(() => completeEvaluation(s.id), 4_000);
+      return ok(ev, 202);
+    }
+    if (p[2] === "evaluation" && p.length === 3 && M === "GET") {
       const ev = db.evaluations.find((e) => e.sessionId === s.id);
       return ev ? ok(ev) : err(404, "not_found", "evaluation not started");
     }

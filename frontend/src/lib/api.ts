@@ -124,6 +124,7 @@ export const api = {
       `/sessions/${enc(sessionId)}/channels/${enc(channelId)}/messages`,
       parentId ? { content, parentId } : { content },
     ),
+  retryEvaluation: (sessionId: string) => request<Evaluation>("POST", `/sessions/${enc(sessionId)}/evaluation/retry`),
   evaluation: async (sessionId: string): Promise<Evaluation | null> => {
     try {
       return await request<Evaluation>("GET", `/sessions/${enc(sessionId)}/evaluation`);

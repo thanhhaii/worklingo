@@ -43,7 +43,7 @@ Tasks:
 %s`
 
 // reviewMessages produces one MessageReview per learner message. Failed batches
-// fall back to messages without issues.
+// remain unavailable, never verified clean.
 func (s *Service) reviewMessages(ctx context.Context, d *sessionData) []dto.MessageReview {
 	issues := map[uuid.UUID][]rawIssue{}
 	var mu sync.Mutex
@@ -55,7 +55,7 @@ func (s *Service) reviewMessages(ctx context.Context, d *sessionData) []dto.Mess
 			defer wg.Done()
 			got, err := s.reviewBatch(ctx, d, batch)
 			if err != nil {
-				s.log.Warn("message review batch failed, no issues recorded", "messages", len(batch), "err", err)
+				s.log.Warn("message review batch unavailable", "messages", len(batch), "err", err)
 				return
 			}
 			mu.Lock()
@@ -98,10 +98,21 @@ func (s *Service) reviewBatch(ctx context.Context, d *sessionData, batch []store
 		return nil, err
 	}
 	res := map[uuid.UUID][]rawIssue{}
+	duplicates := map[uuid.UUID]bool{}
+	seen := map[uuid.UUID]bool{}
 	for _, m := range out.Messages {
 		if id, ok := byKey[strings.ToLower(strings.TrimSpace(m.ID))]; ok {
-			res[id] = m.Issues
+			if seen[id] {
+				duplicates[id] = true
+			}
+			seen[id] = true
+			if m.Issues != nil {
+				res[id] = m.Issues
+			}
 		}
+	}
+	for id := range duplicates {
+		delete(res, id)
 	}
 	return res, nil
 }
@@ -195,17 +206,40 @@ func (s *Service) reviewTasks(ctx context.Context, d *sessionData, skipLLM bool)
 			s.log.Warn("task review failed, using empty reviews", "err", err)
 		} else {
 			raw = map[int][]rawPointReview{}
+			seen := map[int]bool{}
+			duplicate := map[int]bool{}
 			for _, t := range out.Tasks {
 				var n int
-				if _, err := fmt.Sscanf(strings.ToLower(strings.TrimSpace(t.ID)), "t%d", &n); err == nil && n >= 1 && n <= len(d.tasks) {
-					raw[n-1] = t.Points
+				if _, err := fmt.Sscanf(strings.ToLower(strings.TrimSpace(t.ID)), "t%d", &n); err == nil && n >= 1 && n <= len(d.tasks) && strings.ToLower(strings.TrimSpace(t.ID)) == fmt.Sprintf("t%d", n) {
+					if seen[n-1] {
+						duplicate[n-1] = true
+					}
+					seen[n-1] = true
+					if t.Points != nil {
+						raw[n-1] = t.Points
+					}
 				}
+			}
+			for n := range duplicate {
+				delete(raw, n)
 			}
 		}
 	}
 	reviews := make([]dto.TaskReview, 0, len(d.tasks))
 	for ti, t := range d.tasks {
-		reviews = append(reviews, assembleTaskReview(t, d.points[t.ID], raw[ti], texts[ti]))
+		r := assembleTaskReview(t, d.points[t.ID], raw[ti], texts[ti])
+		if !skipLLM {
+			if _, ok := raw[ti]; !ok {
+				r.ReviewStatus = "UNAVAILABLE"
+			}
+		}
+		if skipLLM {
+			r.ReviewStatus = "AVAILABLE"
+			for i := range r.TalkingPoints {
+				r.TalkingPoints[i].Reason = "You did not send any messages to answer this task."
+			}
+		}
+		reviews = append(reviews, r)
 	}
 	return reviews
 }

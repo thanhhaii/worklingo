@@ -199,7 +199,7 @@ loop:
 	}
 	for i := 0; i < 60; i++ {
 		call("GET", "/sessions/"+sess.ID+"/evaluation", tok, nil, &ev)
-		if ev.Status == "DONE" || ev.Status == "FAILED" {
+		if ev.Status == "DONE" || ev.Status == "PARTIAL" || ev.Status == "FAILED" {
 			break
 		}
 		time.Sleep(5 * time.Second)

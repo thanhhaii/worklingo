@@ -12,33 +12,15 @@ import (
 	"github.com/google/uuid"
 )
 
-const completeEvaluation = `-- name: CompleteEvaluation :one
-UPDATE evaluations SET status = 'DONE', grammar = $2, tone = $3, vocabulary = $4, overall = $5, summary = $6, message_reviews = $7, task_reviews = $8
-WHERE session_id = $1 RETURNING id, session_id, status, grammar, tone, vocabulary, overall, summary, corrections, created_at, message_reviews, task_reviews
+const claimEvaluationRetry = `-- name: ClaimEvaluationRetry :one
+UPDATE evaluations e SET status = 'PENDING'
+WHERE e.session_id = $1 AND e.status IN ('FAILED', 'PARTIAL')
+AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = e.session_id AND s.status <> 'ACTIVE')
+RETURNING e.id, e.session_id, e.status, e.grammar, e.tone, e.vocabulary, e.overall, e.summary, e.corrections, e.created_at, e.message_reviews, e.task_reviews, e.score_status, e.message_review_status, e.task_review_status
 `
 
-type CompleteEvaluationParams struct {
-	SessionID      uuid.UUID
-	Grammar        int32
-	Tone           int32
-	Vocabulary     int32
-	Overall        int32
-	Summary        string
-	MessageReviews json.RawMessage
-	TaskReviews    json.RawMessage
-}
-
-func (q *Queries) CompleteEvaluation(ctx context.Context, arg CompleteEvaluationParams) (Evaluation, error) {
-	row := q.db.QueryRow(ctx, completeEvaluation,
-		arg.SessionID,
-		arg.Grammar,
-		arg.Tone,
-		arg.Vocabulary,
-		arg.Overall,
-		arg.Summary,
-		arg.MessageReviews,
-		arg.TaskReviews,
-	)
+func (q *Queries) ClaimEvaluationRetry(ctx context.Context, sessionID uuid.UUID) (Evaluation, error) {
+	row := q.db.QueryRow(ctx, claimEvaluationRetry, sessionID)
 	var i Evaluation
 	err := row.Scan(
 		&i.ID,
@@ -53,21 +35,23 @@ func (q *Queries) CompleteEvaluation(ctx context.Context, arg CompleteEvaluation
 		&i.CreatedAt,
 		&i.MessageReviews,
 		&i.TaskReviews,
+		&i.ScoreStatus,
+		&i.MessageReviewStatus,
+		&i.TaskReviewStatus,
 	)
 	return i, err
 }
 
-const failEvaluation = `-- name: FailEvaluation :one
-UPDATE evaluations SET status = 'FAILED', summary = $2 WHERE session_id = $1 RETURNING id, session_id, status, grammar, tone, vocabulary, overall, summary, corrections, created_at, message_reviews, task_reviews
+const finalizeEvaluation = `-- name: FinalizeEvaluation :one
+UPDATE evaluations SET status = CASE
+WHEN score_status <> 'AVAILABLE' THEN 'FAILED'
+WHEN message_review_status = 'AVAILABLE' AND task_review_status = 'AVAILABLE' THEN 'DONE'
+ELSE 'PARTIAL' END
+WHERE session_id = $1 AND status = 'PENDING' RETURNING id, session_id, status, grammar, tone, vocabulary, overall, summary, corrections, created_at, message_reviews, task_reviews, score_status, message_review_status, task_review_status
 `
 
-type FailEvaluationParams struct {
-	SessionID uuid.UUID
-	Summary   string
-}
-
-func (q *Queries) FailEvaluation(ctx context.Context, arg FailEvaluationParams) (Evaluation, error) {
-	row := q.db.QueryRow(ctx, failEvaluation, arg.SessionID, arg.Summary)
+func (q *Queries) FinalizeEvaluation(ctx context.Context, sessionID uuid.UUID) (Evaluation, error) {
+	row := q.db.QueryRow(ctx, finalizeEvaluation, sessionID)
 	var i Evaluation
 	err := row.Scan(
 		&i.ID,
@@ -82,12 +66,15 @@ func (q *Queries) FailEvaluation(ctx context.Context, arg FailEvaluationParams) 
 		&i.CreatedAt,
 		&i.MessageReviews,
 		&i.TaskReviews,
+		&i.ScoreStatus,
+		&i.MessageReviewStatus,
+		&i.TaskReviewStatus,
 	)
 	return i, err
 }
 
 const getEvaluation = `-- name: GetEvaluation :one
-SELECT id, session_id, status, grammar, tone, vocabulary, overall, summary, corrections, created_at, message_reviews, task_reviews FROM evaluations WHERE session_id = $1
+SELECT id, session_id, status, grammar, tone, vocabulary, overall, summary, corrections, created_at, message_reviews, task_reviews, score_status, message_review_status, task_review_status FROM evaluations WHERE session_id = $1
 `
 
 func (q *Queries) GetEvaluation(ctx context.Context, sessionID uuid.UUID) (Evaluation, error) {
@@ -106,12 +93,15 @@ func (q *Queries) GetEvaluation(ctx context.Context, sessionID uuid.UUID) (Evalu
 		&i.CreatedAt,
 		&i.MessageReviews,
 		&i.TaskReviews,
+		&i.ScoreStatus,
+		&i.MessageReviewStatus,
+		&i.TaskReviewStatus,
 	)
 	return i, err
 }
 
 const listPendingEvaluations = `-- name: ListPendingEvaluations :many
-SELECT id, session_id, status, grammar, tone, vocabulary, overall, summary, corrections, created_at, message_reviews, task_reviews FROM evaluations WHERE status = 'PENDING'
+SELECT id, session_id, status, grammar, tone, vocabulary, overall, summary, corrections, created_at, message_reviews, task_reviews, score_status, message_review_status, task_review_status FROM evaluations WHERE status = 'PENDING'
 `
 
 func (q *Queries) ListPendingEvaluations(ctx context.Context) ([]Evaluation, error) {
@@ -136,6 +126,9 @@ func (q *Queries) ListPendingEvaluations(ctx context.Context) ([]Evaluation, err
 			&i.CreatedAt,
 			&i.MessageReviews,
 			&i.TaskReviews,
+			&i.ScoreStatus,
+			&i.MessageReviewStatus,
+			&i.TaskReviewStatus,
 		); err != nil {
 			return nil, err
 		}
@@ -147,10 +140,65 @@ func (q *Queries) ListPendingEvaluations(ctx context.Context) ([]Evaluation, err
 	return items, nil
 }
 
+const saveEvaluationMessageReviews = `-- name: SaveEvaluationMessageReviews :exec
+UPDATE evaluations SET message_reviews = $2, message_review_status = $3 WHERE session_id = $1 AND status = 'PENDING'
+`
+
+type SaveEvaluationMessageReviewsParams struct {
+	SessionID           uuid.UUID
+	MessageReviews      json.RawMessage
+	MessageReviewStatus string
+}
+
+func (q *Queries) SaveEvaluationMessageReviews(ctx context.Context, arg SaveEvaluationMessageReviewsParams) error {
+	_, err := q.db.Exec(ctx, saveEvaluationMessageReviews, arg.SessionID, arg.MessageReviews, arg.MessageReviewStatus)
+	return err
+}
+
+const saveEvaluationScores = `-- name: SaveEvaluationScores :exec
+UPDATE evaluations SET score_status = 'AVAILABLE', grammar = $2, tone = $3, vocabulary = $4, overall = $5, summary = $6
+WHERE session_id = $1 AND status = 'PENDING'
+`
+
+type SaveEvaluationScoresParams struct {
+	SessionID  uuid.UUID
+	Grammar    int32
+	Tone       int32
+	Vocabulary int32
+	Overall    int32
+	Summary    string
+}
+
+func (q *Queries) SaveEvaluationScores(ctx context.Context, arg SaveEvaluationScoresParams) error {
+	_, err := q.db.Exec(ctx, saveEvaluationScores,
+		arg.SessionID,
+		arg.Grammar,
+		arg.Tone,
+		arg.Vocabulary,
+		arg.Overall,
+		arg.Summary,
+	)
+	return err
+}
+
+const saveEvaluationTaskReviews = `-- name: SaveEvaluationTaskReviews :exec
+UPDATE evaluations SET task_reviews = $2, task_review_status = $3 WHERE session_id = $1 AND status = 'PENDING'
+`
+
+type SaveEvaluationTaskReviewsParams struct {
+	SessionID        uuid.UUID
+	TaskReviews      json.RawMessage
+	TaskReviewStatus string
+}
+
+func (q *Queries) SaveEvaluationTaskReviews(ctx context.Context, arg SaveEvaluationTaskReviewsParams) error {
+	_, err := q.db.Exec(ctx, saveEvaluationTaskReviews, arg.SessionID, arg.TaskReviews, arg.TaskReviewStatus)
+	return err
+}
+
 const upsertPendingEvaluation = `-- name: UpsertPendingEvaluation :one
 INSERT INTO evaluations (session_id, status) VALUES ($1, 'PENDING')
-ON CONFLICT (session_id) DO UPDATE SET status = 'PENDING'
-RETURNING id, session_id, status, grammar, tone, vocabulary, overall, summary, corrections, created_at, message_reviews, task_reviews
+ON CONFLICT (session_id) DO NOTHING RETURNING id, session_id, status, grammar, tone, vocabulary, overall, summary, corrections, created_at, message_reviews, task_reviews, score_status, message_review_status, task_review_status
 `
 
 func (q *Queries) UpsertPendingEvaluation(ctx context.Context, sessionID uuid.UUID) (Evaluation, error) {
@@ -169,6 +217,9 @@ func (q *Queries) UpsertPendingEvaluation(ctx context.Context, sessionID uuid.UU
 		&i.CreatedAt,
 		&i.MessageReviews,
 		&i.TaskReviews,
+		&i.ScoreStatus,
+		&i.MessageReviewStatus,
+		&i.TaskReviewStatus,
 	)
 	return i, err
 }

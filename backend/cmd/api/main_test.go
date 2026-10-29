@@ -32,6 +32,9 @@ func TestNewLLMProviderSendsReasoningOnlyForGemini(t *testing.T) {
 			}))
 			defer server.Close()
 			p := newLLMProvider(config.LLMProfile{Provider: provider, BaseURL: server.URL, APIKey: "test-key", Model: "model"}, time.Second)
+			if p.ProviderName != provider {
+				t.Fatalf("call logging label = %s, want %s", p.ProviderName, provider)
+			}
 			if _, err := p.Complete(context.Background(), llm.Request{Model: "model"}); err != nil {
 				t.Fatal(err)
 			}

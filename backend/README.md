@@ -143,9 +143,25 @@ internal/llm       Provider interface + OpenAI-compatible SSE client, JSON extra
   session `warnings`+1, SYSTEM message, `deadline.updated`, `warning.new`, `session.updated`.
 - **Recovery on startup:** ACTIVE sessions get their expiry timer and task scheduler back (`next_task_at` is persisted);
   expired ones are completed and evaluated; PENDING deadlines are rescheduled (past-due ones expire right away); PENDING
-  evaluations are re-run.
+  evaluations resume unavailable components and retain persisted successes. An in-process dispatch guard prevents startup recovery from duplicating a newly started evaluation.
 - LLM failures never crash the server: persona replies fall back to an "offline" note, the validator falls back to the
-  heuristic, task generation falls back to canned tasks, and the evaluation goes to `FAILED`.
+  heuristic, and task generation falls back to canned tasks. Evaluation scores and reviews save independently: unavailable scoring produces `FAILED`, while available scores with missing review coverage produce `PARTIAL`. Available scores/reviews stay visible on the report. Missing reviews never mean “No issues”.
+
+## Evaluation retries and usage logs
+
+The session owner can explicitly retry missing feedback with `POST /api/sessions/{id}/evaluation/retry`. It returns `202` with the saved evaluation marked `PENDING`, or `409` for active sessions, running/completed evaluations, or evaluations that have not started. A conditional database update claims failed/partial work before dispatch so concurrent requests cannot start duplicate retries. Successful scores and individual message/task reviews are preserved and skipped. Pending work resumes on restart; the deployment assumes one API process for recovery (multiple replicas would need database worker leases).
+
+Migration `00003_evaluation_integrity.sql` adds component availability and `PARTIAL`. Legacy scores remain available, but historical reviews cannot prove coverage and are marked unavailable until explicitly retried. The existing automatic second scoring attempt was removed to avoid unrequested paid calls.
+
+Every OpenAI-compatible call emits one structured `llm.call` event at INFO with `provider`, `model`, `stream`, `status`, `duration_ms`, `prompt_tokens`, `completion_tokens`, and `total_tokens`. Status describes the upstream call/response, not the later application-level JSON validation. Streaming requests set `stream_options.include_usage`; usage-only SSE events and plain JSON streaming fallbacks are captured. Missing usage fields are `null`, never guessed or converted to a measured dollar cost. Logs exclude prompts, response bodies, credentials and endpoint URLs. Usage availability depends on the configured provider/gateway.
+
+For scratch database integration tests, explicitly set the allowlisted disposable URL:
+
+```bash
+TEST_DATABASE_URL='postgres://worklingo:worklingo@localhost:5433/worklingo_codex_20261029?sslmode=disable' go test ./internal/http
+```
+
+These integration tests migrate only that database, create their own fixture users (or an isolated schema for upgrade/rollback), and clean them up. Without `TEST_DATABASE_URL`, database tests skip. Other URLs are rejected. Frontend mock retry coverage runs with `node --test evaluation-retry.test.mjs` from `frontend/` and uses the installed TypeScript compiler plus Node's test runner.
 
 ## Smoke test
 

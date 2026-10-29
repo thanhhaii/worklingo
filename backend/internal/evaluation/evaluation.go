@@ -4,6 +4,7 @@ package evaluation
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/worklingo/backend/internal/chat"
 	"github.com/worklingo/backend/internal/dto"
@@ -21,13 +23,14 @@ import (
 )
 
 type Service struct {
-	q     *store.Queries
-	cat   *persona.Catalog
-	hub   ws.Broadcaster
-	llm   llm.Provider
-	model string
-	log   *slog.Logger
-	root  context.Context
+	q      *store.Queries
+	cat    *persona.Catalog
+	hub    ws.Broadcaster
+	llm    llm.Provider
+	model  string
+	log    *slog.Logger
+	root   context.Context
+	active sync.Map
 }
 
 func New(root context.Context, q *store.Queries, cat *persona.Catalog, hub ws.Broadcaster, p llm.Provider, model string, log *slog.Logger) *Service {
@@ -39,12 +42,15 @@ func (s *Service) Start(sessionID uuid.UUID) {
 	ctx, cancel := context.WithTimeout(s.root, 10*time.Second)
 	e, err := s.q.UpsertPendingEvaluation(ctx, sessionID)
 	cancel()
+	if errors.Is(err, pgx.ErrNoRows) {
+		return
+	}
 	if err != nil {
 		s.log.Error("create evaluation", "session", sessionID, "err", err)
 		return
 	}
 	s.hub.Broadcast(sessionID, ws.TypeEvaluationUpdated, dto.FromEvaluation(e))
-	go s.run(sessionID)
+	s.launch(sessionID)
 }
 
 // Recover restarts evaluations left PENDING by a previous process.
@@ -55,7 +61,7 @@ func (s *Service) Recover(ctx context.Context) {
 		return
 	}
 	for _, e := range es {
-		go s.run(e.SessionID)
+		s.launch(e.SessionID)
 	}
 }
 
@@ -82,69 +88,196 @@ summary: 2-4 sentences of encouraging, specific feedback, addressed to the learn
 Respond with ONLY a JSON object, no markdown:
 {"grammar": 0, "tone": 0, "vocabulary": 0, "overall": 0, "summary": "..."}`
 
+// Retry atomically claims only unfinished work before dispatching a worker.
+// Ownership is checked by the HTTP handler; the database also excludes active sessions.
+func (s *Service) Retry(ctx context.Context, sessionID uuid.UUID) (dto.Evaluation, error) {
+	if _, running := s.active.Load(sessionID); running {
+		return dto.Evaluation{}, pgx.ErrNoRows
+	}
+	e, err := s.q.ClaimEvaluationRetry(ctx, sessionID)
+	if err != nil {
+		return dto.Evaluation{}, err
+	}
+	out := dto.FromEvaluation(e)
+	s.hub.Broadcast(sessionID, ws.TypeEvaluationUpdated, out)
+	s.launch(sessionID)
+	return out, nil
+}
+
+// Reserve before dispatch so startup recovery cannot race a newly started worker.
+func (s *Service) launch(sessionID uuid.UUID) {
+	if _, running := s.active.LoadOrStore(sessionID, true); running {
+		return
+	}
+	go func() {
+		defer s.active.Delete(sessionID)
+		s.run(sessionID)
+	}()
+}
+
 func (s *Service) run(sessionID uuid.UUID) {
 	defer func() {
 		if r := recover(); r != nil {
-			s.log.Error("evaluation panic", "panic", r)
-			s.fail(sessionID, "Internal error while evaluating.")
+			s.log.Error("evaluation panic", "session", sessionID)
+			s.finalize(sessionID)
 		}
 	}()
 	ctx, cancel := context.WithTimeout(s.root, 5*time.Minute)
 	defer cancel()
-
+	existing, err := s.q.GetEvaluation(ctx, sessionID)
+	if err != nil {
+		s.log.Error("load evaluation", "err", err)
+		s.finalize(sessionID)
+		return
+	}
+	if existing.Status != "PENDING" {
+		return
+	}
 	data, err := s.load(ctx, sessionID)
 	if err != nil {
 		s.log.Error("evaluation transcript", "err", err)
-		s.fail(sessionID, "Could not load the session transcript.")
+		s.finalize(sessionID)
 		return
 	}
-	if len(data.learner) == 0 {
-		s.complete(ctx, sessionID, result{
-			Grammar: f(0), Tone: f(0), Vocabulary: f(0), Overall: f(0),
-			Summary: "You didn't send any messages in this session, so there is nothing to evaluate yet. Next time, try replying to your colleagues' questions and tasks.",
-		}, nil, s.reviewTasks(ctx, data, true))
-		return
-	}
-
-	// Scoring and the two reviews run concurrently; only scoring failure fails the evaluation.
-	var (
-		wg      sync.WaitGroup
-		out     result
-		scoreEr error
-		mreview []dto.MessageReview
-		treview []dto.TaskReview
-	)
+	prior := dto.FromEvaluation(existing)
+	var wg sync.WaitGroup
 	wg.Add(3)
-	go func() { defer wg.Done(); out, scoreEr = s.score(ctx, data) }()
-	go func() { defer wg.Done(); mreview = s.reviewMessages(ctx, data) }()
-	go func() { defer wg.Done(); treview = s.reviewTasks(ctx, data, false) }()
+	go func() {
+		defer wg.Done()
+		if existing.ScoreStatus == "AVAILABLE" {
+			return
+		}
+		var out result
+		var err error
+		if len(data.learner) == 0 {
+			out = result{Grammar: f(0), Tone: f(0), Vocabulary: f(0), Overall: f(0), Summary: "You didn't send any messages in this session, so there is nothing to evaluate yet. Next time, try replying to your colleagues' questions and tasks."}
+		} else {
+			out, err = s.score(ctx, data)
+		}
+		if err != nil {
+			s.log.Warn("evaluation scores unavailable", "session", sessionID)
+			return
+		}
+		s.saveScores(sessionID, out)
+	}()
+	go func() {
+		defer wg.Done()
+		if existing.MessageReviewStatus == "AVAILABLE" {
+			return
+		}
+		reviews := s.retryMessageReviews(ctx, data, prior.MessageReviews)
+		raw, err := json.Marshal(reviews)
+		if err != nil {
+			s.log.Error("encode message reviews", "err", err)
+			return
+		}
+		status := "AVAILABLE"
+		for _, r := range reviews {
+			if r.ReviewStatus != "AVAILABLE" {
+				status = "UNAVAILABLE"
+			}
+		}
+		s.checkpoint(sessionID, func(c context.Context) error {
+			return s.q.SaveEvaluationMessageReviews(c, store.SaveEvaluationMessageReviewsParams{SessionID: sessionID, MessageReviews: raw, MessageReviewStatus: status})
+		})
+	}()
+	go func() {
+		defer wg.Done()
+		if existing.TaskReviewStatus == "AVAILABLE" {
+			return
+		}
+		reviews := s.retryTaskReviews(ctx, data, prior.TaskReviews)
+		raw, err := json.Marshal(reviews)
+		if err != nil {
+			s.log.Error("encode task reviews", "err", err)
+			return
+		}
+		status := "AVAILABLE"
+		for _, r := range reviews {
+			if r.ReviewStatus != "AVAILABLE" {
+				status = "UNAVAILABLE"
+			}
+		}
+		s.checkpoint(sessionID, func(c context.Context) error {
+			return s.q.SaveEvaluationTaskReviews(c, store.SaveEvaluationTaskReviewsParams{SessionID: sessionID, TaskReviews: raw, TaskReviewStatus: status})
+		})
+	}()
 	wg.Wait()
-	if scoreEr != nil {
-		s.fail(sessionID, "The evaluation service is unavailable right now.")
-		return
+	s.finalize(sessionID)
+}
+
+// Each component is saved independently, including when another component fails.
+func (s *Service) checkpoint(sessionID uuid.UUID, save func(context.Context) error) {
+	ctx, cancel := context.WithTimeout(s.root, 10*time.Second)
+	defer cancel()
+	if err := save(ctx); err != nil {
+		s.log.Error("save evaluation component", "session", sessionID, "err", err)
 	}
-	s.complete(ctx, sessionID, out, mreview, treview)
+}
+
+func (s *Service) retryMessageReviews(ctx context.Context, data *sessionData, prior []dto.MessageReview) []dto.MessageReview {
+	available := map[string]dto.MessageReview{}
+	for _, r := range prior {
+		if r.ReviewStatus == "AVAILABLE" {
+			available[r.MessageID] = r
+		}
+	}
+	pending := *data
+	pending.learner = nil
+	for _, m := range data.learner {
+		if _, ok := available[m.ID.String()]; !ok {
+			pending.learner = append(pending.learner, m)
+		}
+	}
+	for _, r := range s.reviewMessages(ctx, &pending) {
+		available[r.MessageID] = r
+	}
+	out := make([]dto.MessageReview, 0, len(data.learner))
+	for _, m := range data.learner {
+		out = append(out, available[m.ID.String()])
+	}
+	return out
+}
+
+func (s *Service) retryTaskReviews(ctx context.Context, data *sessionData, prior []dto.TaskReview) []dto.TaskReview {
+	available := map[string]dto.TaskReview{}
+	for _, r := range prior {
+		if r.ReviewStatus == "AVAILABLE" {
+			available[r.TaskID] = r
+		}
+	}
+	pending := *data
+	pending.tasks = nil
+	for _, t := range data.tasks {
+		if _, ok := available[t.ID.String()]; !ok {
+			pending.tasks = append(pending.tasks, t)
+		}
+	}
+	for _, r := range s.reviewTasks(ctx, &pending, len(data.learner) == 0) {
+		available[r.TaskID] = r
+	}
+	out := make([]dto.TaskReview, 0, len(data.tasks))
+	for _, t := range data.tasks {
+		out = append(out, available[t.ID.String()])
+	}
+	return out
 }
 
 func (s *Service) score(ctx context.Context, d *sessionData) (result, error) {
 	prompt := fmt.Sprintf("Ghosting warnings (requests left unanswered too long): %d\n\nSession transcript:\n%s", d.warnings, d.transcript)
 	var out result
-	var lastErr error
-	for attempt := 0; attempt < 2; attempt++ {
-		temp := 0.2
-		lastErr = llm.CompleteJSON(ctx, s.llm, llm.Request{
-			Model: s.model, MaxTokens: 3000, Temperature: &temp,
-			Messages: []llm.Message{{Role: llm.RoleSystem, Content: systemPrompt}, {Role: llm.RoleUser, Content: prompt}},
-		}, &out)
-		if lastErr == nil && out.Grammar != nil && out.Tone != nil && out.Vocabulary != nil {
-			return out, nil
-		}
-		if lastErr == nil {
-			lastErr = fmt.Errorf("missing scores in evaluation JSON")
-		}
-		s.log.Warn("evaluation attempt failed", "attempt", attempt+1, "err", lastErr)
+	temp := 0.2
+	err := llm.CompleteJSON(ctx, s.llm, llm.Request{
+		Model: s.model, MaxTokens: 3000, Temperature: &temp,
+		Messages: []llm.Message{{Role: llm.RoleSystem, Content: systemPrompt}, {Role: llm.RoleUser, Content: prompt}},
+	}, &out)
+	if err != nil {
+		return out, err
 	}
-	return out, lastErr
+	if out.Grammar == nil || out.Tone == nil || out.Vocabulary == nil || strings.TrimSpace(out.Summary) == "" {
+		return out, errors.New("missing scores or summary in evaluation JSON")
+	}
+	return out, nil
 }
 
 func f(v float64) *float64 { return &v }
@@ -163,42 +296,29 @@ func clamp(p *float64) int32 {
 	return v
 }
 
-func (s *Service) complete(ctx context.Context, sessionID uuid.UUID, r result, mreview []dto.MessageReview, treview []dto.TaskReview) {
+func (s *Service) saveScores(sessionID uuid.UUID, r result) {
 	g, t, v := clamp(r.Grammar), clamp(r.Tone), clamp(r.Vocabulary)
 	o := clamp(r.Overall)
 	if r.Overall == nil {
 		o = int32(float64(g)*0.35 + float64(t)*0.4 + float64(v)*0.25 + 0.5)
 	}
-	if mreview == nil {
-		mreview = []dto.MessageReview{}
-	}
-	if treview == nil {
-		treview = []dto.TaskReview{}
-	}
-	mraw, _ := json.Marshal(mreview)
-	traw, _ := json.Marshal(treview)
-	e, err := s.q.CompleteEvaluation(ctx, store.CompleteEvaluationParams{
-		SessionID: sessionID, Grammar: g, Tone: t, Vocabulary: v, Overall: o,
-		Summary: strings.TrimSpace(r.Summary), MessageReviews: mraw, TaskReviews: traw,
+	s.checkpoint(sessionID, func(ctx context.Context) error {
+		return s.q.SaveEvaluationScores(ctx, store.SaveEvaluationScoresParams{
+			SessionID: sessionID, Grammar: g, Tone: t, Vocabulary: v, Overall: o, Summary: strings.TrimSpace(r.Summary),
+		})
 	})
-	if err != nil {
-		s.log.Error("store evaluation", "err", err)
-		s.fail(sessionID, "Could not save the evaluation.")
-		return
-	}
-	s.hub.Broadcast(sessionID, ws.TypeEvaluationUpdated, dto.FromEvaluation(e))
-	s.log.Info("evaluation done", "session", sessionID, "overall", o)
 }
 
-func (s *Service) fail(sessionID uuid.UUID, reason string) {
+func (s *Service) finalize(sessionID uuid.UUID) {
 	ctx, cancel := context.WithTimeout(s.root, 10*time.Second)
 	defer cancel()
-	e, err := s.q.FailEvaluation(ctx, store.FailEvaluationParams{SessionID: sessionID, Summary: reason})
+	e, err := s.q.FinalizeEvaluation(ctx, sessionID)
 	if err != nil {
-		s.log.Error("fail evaluation", "err", err)
+		s.log.Error("finalize evaluation", "session", sessionID, "err", err)
 		return
 	}
 	s.hub.Broadcast(sessionID, ws.TypeEvaluationUpdated, dto.FromEvaluation(e))
+	s.log.Info("evaluation finished", "session", sessionID, "status", e.Status)
 }
 
 // sessionData is everything the evaluation calls need, loaded once.

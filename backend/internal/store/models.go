@@ -33,18 +33,21 @@ type Deadline struct {
 }
 
 type Evaluation struct {
-	ID             uuid.UUID
-	SessionID      uuid.UUID
-	Status         string
-	Grammar        int32
-	Tone           int32
-	Vocabulary     int32
-	Overall        int32
-	Summary        string
-	Corrections    json.RawMessage
-	CreatedAt      time.Time
-	MessageReviews json.RawMessage
-	TaskReviews    json.RawMessage
+	ID                  uuid.UUID
+	SessionID           uuid.UUID
+	Status              string
+	Grammar             int32
+	Tone                int32
+	Vocabulary          int32
+	Overall             int32
+	Summary             string
+	Corrections         json.RawMessage
+	CreatedAt           time.Time
+	MessageReviews      json.RawMessage
+	TaskReviews         json.RawMessage
+	ScoreStatus         string
+	MessageReviewStatus string
+	TaskReviewStatus    string
 }
 
 type Message struct {

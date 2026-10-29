@@ -9,7 +9,7 @@ import { Logo } from "@/components/logo";
 import { scoreColor } from "@/components/score";
 import { api, errorMessage, getToken } from "@/lib/api";
 import { durationBetween, formatDateTime, formatTime } from "@/lib/format";
-import type { Evaluation, IssueCategory, MessageReview, SessionDetails, TaskReview } from "@/lib/types";
+import type { Evaluation, IssueCategory, MessageReview, ReviewStatus, SessionDetails, TaskReview } from "@/lib/types";
 import { WsClient } from "@/lib/ws";
 import { cn } from "@/lib/utils";
 import { DEFAULT_PERSONAS } from "@/lib/personas";
@@ -29,14 +29,14 @@ const STATUS_STYLE: Record<TaskReview["status"], string> = {
   DONE: "bg-[#e5f4ee] text-[#007a5a]",
 };
 
-function TasksSection({ reviews, personaName }: { reviews: TaskReview[]; personaName: (id: string) => string }) {
+function TasksSection({ reviews, coverage, personaName }: { reviews: TaskReview[]; coverage: ReviewStatus; personaName: (id: string) => string }) {
   return (
     <section className="mt-6 rounded-xl border bg-white p-4 sm:p-6">
       <h2 className="text-lg font-bold text-[#1d1c1d]">
         Tasks <span className="text-sm font-normal text-[#616061]">({reviews.length})</span>
       </h2>
       {reviews.length === 0 ? (
-        <p className="mt-2 text-sm text-[#616061]">No tasks were assigned in this session.</p>
+        <p className="mt-2 text-sm text-[#616061]">{coverage === "AVAILABLE" ? "No tasks were assigned in this session." : "Task review is unavailable."}</p>
       ) : (
         <div className="mt-3 flex flex-col gap-4">
           {reviews.map((t) => (
@@ -53,6 +53,7 @@ function TasksSection({ reviews, personaName }: { reviews: TaskReview[]; persona
                   {t.status === "ACKNOWLEDGED" ? "Acknowledged" : t.status === "OPEN" ? "Open" : "Done"}
                 </span>
               </div>
+              {t.reviewStatus !== "AVAILABLE" && <p className="mt-2 text-sm text-amber-800">Detailed feedback is unavailable. Task progress below comes from your session.</p>}
               <ul className="mt-3 flex flex-col gap-3">
                 {(t.talkingPoints ?? []).map((p) => (
                   <li key={p.talkingPointId} className="flex gap-2 text-sm">
@@ -88,7 +89,8 @@ function TasksSection({ reviews, personaName }: { reviews: TaskReview[]; persona
   );
 }
 
-function MessageReviewSection({ reviews }: { reviews: MessageReview[] }) {
+function MessageReviewSection({ reviews, coverage }: { reviews: MessageReview[]; coverage: ReviewStatus }) {
+  const reviewedCount = reviews.filter((r) => r.reviewStatus === "AVAILABLE").length;
   const issueCount = reviews.reduce((n, r) => n + r.issues.length, 0);
   const majorCount = reviews.reduce((n, r) => n + r.issues.filter((i) => i.severity === "MAJOR").length, 0);
   return (
@@ -96,12 +98,12 @@ function MessageReviewSection({ reviews }: { reviews: MessageReview[] }) {
       <div className="px-4 pt-5 pb-3 sm:px-6">
         <h2 className="text-lg font-bold text-[#1d1c1d]">Message review</h2>
         <p className="mt-0.5 text-sm text-[#616061]">
-          {reviews.length} message(s) · {issueCount} issue(s) ·{" "}
+          {reviewedCount} of {reviews.length} message(s) reviewed · {issueCount} recorded issue(s) ·{" "}
           <span className={cn(majorCount > 0 && "font-bold text-[#e01e5a]")}>{majorCount} major</span>
         </p>
       </div>
       {reviews.length === 0 ? (
-        <p className="px-4 pb-6 text-sm text-[#616061] sm:px-6">You didn&apos;t send any messages.</p>
+        <p className="px-4 pb-6 text-sm text-[#616061] sm:px-6">{coverage === "AVAILABLE" ? "You didn’t send any messages." : "Message review is unavailable."}</p>
       ) : (
         <div className="border-t border-[#e1e1e1]">
           <div className="hidden bg-[#f8f8f8] text-xs font-bold tracking-wide text-[#616061] uppercase md:grid md:grid-cols-[2fr_3fr]">
@@ -117,7 +119,9 @@ function MessageReviewSection({ reviews }: { reviews: MessageReview[] }) {
                 <p className="mt-1 text-sm break-words whitespace-pre-wrap text-[#1d1c1d]">{r.content}</p>
               </div>
               <div className="min-w-0 px-4 pt-1 pb-3 sm:px-6 md:px-4 md:py-3">
-                {r.issues.length === 0 ? (
+                {r.reviewStatus !== "AVAILABLE" ? (
+                  <div className="text-sm text-amber-800">Review unavailable — this message has not been fully checked.</div>
+                ) : r.issues.length === 0 ? (
                   <div className="flex items-center gap-1.5 text-sm font-semibold text-[#007a5a]">
                     <Check className="size-4" /> No issues
                   </div>
@@ -186,6 +190,7 @@ export default function ReportPage() {
   const { status } = useRequireAuth();
   const [details, setDetails] = useState<SessionDetails | null>(null);
   const [evaluation, setEvaluation] = useState<Evaluation | null | undefined>(undefined);
+  const [retrying, setRetrying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const evalRef = useRef<Evaluation | null | undefined>(undefined);
 
@@ -237,7 +242,19 @@ export default function ReportPage() {
 
   const session = details?.session;
   const personaName = (pid: string) => DEFAULT_PERSONAS.find((p) => p.id === pid)?.displayName ?? pid;
-  const done = evaluation?.status === "DONE";
+  const retry = async () => {
+    setRetrying(true);
+    setError(null);
+    try {
+      const ev = await api.retryEvaluation(id);
+      evalRef.current = ev;
+      setEvaluation(ev);
+    } catch (e) {
+      setError(errorMessage(e));
+      // Another tab may already have started the retry. Resume polling its state.
+      try { const ev = await api.evaluation(id); evalRef.current = ev; setEvaluation(ev); } catch { /* keep the retry error */ }
+    } finally { setRetrying(false); }
+  };
 
   return (
     <div className="flex flex-1 flex-col bg-[#f8f8f8]">
@@ -295,35 +312,37 @@ export default function ReportPage() {
           </div>
         )}
 
-        {evaluation?.status === "FAILED" && (
-          <div className="mt-6 flex items-center gap-3 rounded-xl border border-red-200 bg-red-50 p-6 text-red-800">
-            <TriangleAlert className="size-6" />
+        {evaluation && (evaluation.status === "FAILED" || evaluation.status === "PARTIAL") && (
+          <div className="mt-6 flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 p-6 text-amber-900">
+            <TriangleAlert className="size-6 shrink-0" />
             <div className="flex-1">
-              <div className="font-bold">Evaluation failed</div>
-              <div className="text-sm">Something went wrong while scoring this session.</div>
+              <div className="font-bold">{evaluation.status === "FAILED" ? "Scores are unavailable" : "Some feedback is unavailable"}</div>
+              <div className="text-sm">Your available results are saved. Retry to request the missing feedback.</div>
             </div>
-            <Button variant="outline" onClick={() => api.evaluation(id).then(setEvaluation).catch(() => {})}>
-              <RefreshCw /> Refresh
+            <Button variant="outline" disabled={retrying || session?.status === "ACTIVE"} onClick={() => void retry()}>
+              {retrying ? <Loader2 className="animate-spin" /> : <RefreshCw />} Retry
             </Button>
           </div>
         )}
 
-        {done && evaluation && (
+        {evaluation && (
           <>
-            <div className="mt-6 grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-4">
-              <ScoreCard label="Overall" value={evaluation.overall} big />
-              <ScoreCard label="Grammar" value={evaluation.grammar} />
-              <ScoreCard label="Tone" value={evaluation.tone} />
-              <ScoreCard label="Vocabulary" value={evaluation.vocabulary} />
-            </div>
-            <section className="mt-6 rounded-xl border bg-white p-6">
-              <h2 className="text-lg font-bold text-[#1d1c1d]">Summary</h2>
-              <p className="mt-2 text-[15px] leading-relaxed whitespace-pre-wrap text-[#454245]">
-                {evaluation.summary || "No summary provided."}
-              </p>
-            </section>
-            <TasksSection reviews={evaluation.taskReviews ?? []} personaName={personaName} />
-            <MessageReviewSection reviews={evaluation.messageReviews ?? []} />
+            {evaluation.scoreStatus === "AVAILABLE" && <>
+              <div className="mt-6 grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-4">
+                <ScoreCard label="Overall" value={evaluation.overall} big />
+                <ScoreCard label="Grammar" value={evaluation.grammar} />
+                <ScoreCard label="Tone" value={evaluation.tone} />
+                <ScoreCard label="Vocabulary" value={evaluation.vocabulary} />
+              </div>
+              <section className="mt-6 rounded-xl border bg-white p-6">
+                <h2 className="text-lg font-bold text-[#1d1c1d]">Summary</h2>
+                <p className="mt-2 text-[15px] leading-relaxed whitespace-pre-wrap text-[#454245]">
+                  {evaluation.summary || "No summary provided."}
+                </p>
+              </section>
+            </>}
+            {(evaluation.status !== "PENDING" || evaluation.taskReviews.length > 0) && <TasksSection reviews={evaluation.taskReviews ?? []} coverage={evaluation.taskReviewStatus} personaName={personaName} />}
+            {(evaluation.status !== "PENDING" || evaluation.messageReviews.length > 0) && <MessageReviewSection reviews={evaluation.messageReviews ?? []} coverage={evaluation.messageReviewStatus} />}
           </>
         )}
         {status === "authed" && !details && !error && (

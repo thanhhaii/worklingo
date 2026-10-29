@@ -113,7 +113,10 @@ export type MessageIssue = {
   severity: IssueSeverity;
 };
 
+export type ReviewStatus = "AVAILABLE" | "UNAVAILABLE";
+
 export type MessageReview = {
+  reviewStatus: ReviewStatus;
   messageId: string;
   channelLabel: string;
   content: string;
@@ -131,6 +134,7 @@ export type TalkingPointReview = {
 };
 
 export type TaskReview = {
+  reviewStatus: ReviewStatus;
   taskId: string;
   title: string;
   personaId: string;
@@ -141,7 +145,10 @@ export type TaskReview = {
 export type Evaluation = {
   id: string;
   sessionId: string;
-  status: "PENDING" | "DONE" | "FAILED";
+  status: "PENDING" | "DONE" | "PARTIAL" | "FAILED";
+  scoreStatus: ReviewStatus;
+  messageReviewStatus: ReviewStatus;
+  taskReviewStatus: ReviewStatus;
   grammar: number;
   tone: number;
   vocabulary: number;

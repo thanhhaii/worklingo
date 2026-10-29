@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -20,17 +21,29 @@ type OpenAICompat struct {
 	HTTP    *http.Client
 	// ReasoningEffort is omitted by default to preserve legacy endpoint behavior.
 	ReasoningEffort string
+	// ProviderName is a safe configuration label, never an endpoint or credential.
+	ProviderName string
 }
 
 func NewOpenAICompat(baseURL, apiKey string, timeout time.Duration) *OpenAICompat {
 	return &OpenAICompat{
-		BaseURL: strings.TrimRight(baseURL, "/"),
-		APIKey:  apiKey,
-		HTTP:    &http.Client{Timeout: timeout},
+		BaseURL:      strings.TrimRight(baseURL, "/"),
+		APIKey:       apiKey,
+		HTTP:         &http.Client{Timeout: timeout},
+		ProviderName: "openai_compat",
 	}
 }
 
+type tokenUsage struct {
+	PromptTokens     *int64 `json:"prompt_tokens"`
+	CompletionTokens *int64 `json:"completion_tokens"`
+	TotalTokens      *int64 `json:"total_tokens"`
+}
+
 type chatReq struct {
+	StreamOptions *struct {
+		IncludeUsage bool `json:"include_usage"`
+	} `json:"stream_options,omitempty"`
 	Model           string    `json:"model"`
 	Messages        []Message `json:"messages"`
 	Stream          bool      `json:"stream"`
@@ -40,6 +53,7 @@ type chatReq struct {
 }
 
 type chatResp struct {
+	Usage   *tokenUsage `json:"usage"`
 	Choices []struct {
 		FinishReason string `json:"finish_reason"`
 		Message      struct {
@@ -55,11 +69,17 @@ type chatResp struct {
 }
 
 func (c *OpenAICompat) do(ctx context.Context, req Request, stream bool) (*http.Response, error) {
-	body, err := json.Marshal(chatReq{
+	wire := chatReq{
 		Model: req.Model, Messages: req.Messages, Stream: stream,
 		MaxTokens: req.MaxTokens, Temperature: req.Temperature,
 		ReasoningEffort: c.ReasoningEffort,
-	})
+	}
+	if stream {
+		wire.StreamOptions = &struct {
+			IncludeUsage bool `json:"include_usage"`
+		}{true}
+	}
+	body, err := json.Marshal(wire)
 	if err != nil {
 		return nil, err
 	}
@@ -90,20 +110,24 @@ func (c *OpenAICompat) do(ctx context.Context, req Request, stream bool) (*http.
 	return resp, nil
 }
 
-func (c *OpenAICompat) Complete(ctx context.Context, req Request) (string, error) {
+func (c *OpenAICompat) Complete(ctx context.Context, req Request) (text string, err error) {
+	start := time.Now()
+	var usage *tokenUsage
+	defer func() { c.logCall(ctx, req, false, start, err, usage) }()
 	resp, err := c.do(ctx, req, false)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
-	return decodeCompletion(resp)
+	return decodeCompletion(resp, &usage)
 }
 
-func decodeCompletion(resp *http.Response) (string, error) {
+func decodeCompletion(resp *http.Response, usage **tokenUsage) (string, error) {
 	var out chatResp
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return "", errors.New("decode llm response: invalid or incomplete JSON")
 	}
+	*usage = out.Usage
 	if out.Error != nil {
 		return "", errors.New("llm provider error")
 	}
@@ -131,7 +155,10 @@ func finishError(reason string) error {
 	}
 }
 
-func (c *OpenAICompat) Stream(ctx context.Context, req Request, onDelta func(string)) (string, error) {
+func (c *OpenAICompat) Stream(ctx context.Context, req Request, onDelta func(string)) (text string, err error) {
+	start := time.Now()
+	var usage *tokenUsage
+	defer func() { c.logCall(ctx, req, true, start, err, usage) }()
 	resp, err := c.do(ctx, req, true)
 	if err != nil {
 		return "", err
@@ -140,7 +167,7 @@ func (c *OpenAICompat) Stream(ctx context.Context, req Request, onDelta func(str
 
 	// Some proxies ignore stream:true; handle plain JSON too.
 	if ct := resp.Header.Get("Content-Type"); strings.HasPrefix(ct, "application/json") {
-		text, err := decodeCompletion(resp)
+		text, err := decodeCompletion(resp, &usage)
 		if text != "" {
 			onDelta(text)
 		}
@@ -163,6 +190,9 @@ func (c *OpenAICompat) Stream(ctx context.Context, req Request, onDelta func(str
 		var chunk chatResp
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
 			return errors.New("decode llm stream: invalid or incomplete JSON event")
+		}
+		if chunk.Usage != nil {
+			usage = chunk.Usage
 		}
 		if chunk.Error != nil {
 			return errors.New("llm stream provider error")
@@ -211,4 +241,24 @@ func (c *OpenAICompat) Stream(ctx context.Context, req Request, onDelta func(str
 		return full.String(), errors.New("llm returned empty completion")
 	}
 	return full.String(), nil
+}
+
+// logCall records only operational metadata. Missing provider counts stay null.
+func (c *OpenAICompat) logCall(ctx context.Context, req Request, stream bool, start time.Time, err error, usage *tokenUsage) {
+	status := "success"
+	if err != nil {
+		status = "error"
+	}
+	count := func(p *int64) any {
+		if p == nil {
+			return nil
+		}
+		return *p
+	}
+	if usage == nil {
+		usage = &tokenUsage{}
+	}
+	slog.InfoContext(ctx, "llm.call", "provider", c.ProviderName, "model", req.Model,
+		"stream", stream, "status", status, "duration_ms", time.Since(start).Milliseconds(),
+		"prompt_tokens", count(usage.PromptTokens), "completion_tokens", count(usage.CompletionTokens), "total_tokens", count(usage.TotalTokens))
 }

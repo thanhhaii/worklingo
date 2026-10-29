@@ -50,6 +50,7 @@ func NewRouter(d Deps) http.Handler {
 			r.Get("/sessions/{id}", d.H.GetSession)
 			r.Post("/sessions/{id}/end", d.H.EndSession)
 			r.Get("/sessions/{id}/evaluation", d.H.Evaluation)
+			r.Post("/sessions/{id}/evaluation/retry", d.H.RetryEvaluation)
 			r.Get("/sessions/{id}/channels/{channelId}/messages", d.H.ListMessages)
 			r.Post("/sessions/{id}/channels/{channelId}/messages", d.H.PostMessage)
 		})

@@ -90,11 +90,13 @@ type MessageIssue = {
   explanation: string;  // Vietnamese
   category: IssueCategory; severity: IssueSeverity;
 }
+type ReviewStatus = "AVAILABLE" | "UNAVAILABLE"
 type MessageReview = {  // one per learner message
+  reviewStatus: ReviewStatus;
   messageId: string;
   channelLabel: string; // "#general" or "DM: Sarah Chen"
   content: string; createdAt: string;
-  issues: MessageIssue[]; // [] = no issues
+  issues: MessageIssue[]; // [] means no issues ONLY when reviewStatus is AVAILABLE
 }
 
 type TalkingPointReview = {
@@ -106,6 +108,7 @@ type TalkingPointReview = {
   sample: string;        // English sample sentence ("" if the review call failed)
 }
 type TaskReview = {
+  reviewStatus: ReviewStatus; // detailed feedback coverage; independent of task status
   taskId: string; title: string; personaId: string;
   status: "OPEN" | "ACKNOWLEDGED" | "DONE";
   talkingPoints: TalkingPointReview[];
@@ -113,14 +116,26 @@ type TaskReview = {
 
 type Evaluation = {
   id: string; sessionId: string;
-  status: "PENDING" | "DONE" | "FAILED";
+  status: "PENDING" | "DONE" | "PARTIAL" | "FAILED";
+  scoreStatus: ReviewStatus;
+  messageReviewStatus: ReviewStatus;
+  taskReviewStatus: ReviewStatus;
   grammar: number; tone: number; vocabulary: number; overall: number;  // 0-100
-  summary: string;
+  summary: string; // usable score feedback only when scoreStatus is AVAILABLE
   messageReviews: MessageReview[]; // chronological, ALL learner messages; always an array
   taskReviews: TaskReview[];       // chronological by task; always an array
   createdAt: string;
 }
 ```
+
+Evaluation availability:
+
+- `PENDING` means work is running. Previously saved scores/reviews remain available during a retry.
+- `DONE` means scores and all requested message/task reviews are available. `PARTIAL` means scores are available but some reviews are unavailable. `FAILED` means scoring is unavailable; independently successful reviews are still returned.
+- Each message/task has `reviewStatus`. Missing IDs, missing/null issues, malformed or duplicate responses, incomplete task points, unusable corrections/quotes, and failed batches are `UNAVAILABLE`. An explicit `issues: []` on an available message means it was checked without issues.
+- Aggregate review status is `AVAILABLE` only when every corresponding entry is available, including a known empty set. An empty array with unavailable coverage does not prove the session had no messages/tasks. Task `status` and point `covered` still come from session progress and are independent of detailed review availability.
+- Legacy completed reports retain their scores but become `PARTIAL`: previous review arrays lack reliable coverage, so entries without an explicit review status are unavailable until retried.
+- Retry atomically claims failed/partial work before dispatch, preserving successful score, message and task components. Only unavailable messages/tasks are requested again. Authentication and session ownership match GET; another user's session returns 404. Retries are explicit; no automatic paid scoring retry or provider fallback occurs.
 
 ## REST
 | Method | Path | Body | Response |
@@ -138,6 +153,7 @@ type Evaluation = {
 | GET | `/sessions/{id}/channels/{channelId}/messages?before=<iso>&limit=50` | – | `Message[]` ascending by createdAt |
 | POST | `/sessions/{id}/channels/{channelId}/messages` | `{content, parentId?}` | `Message` (also broadcast via WS) |
 | GET | `/sessions/{id}/evaluation` | – | `Evaluation` (404 if not started) |
+| POST | `/sessions/{id}/evaluation/retry` | – | `202 Evaluation` with status PENDING; owner only, completed/aborted sessions only; `409 evaluation_conflict` if active, running, complete or no evaluation |
 
 ## WebSocket
 Envelope both directions: `{ "type": string, "data": object }`.

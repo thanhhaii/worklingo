@@ -1,6 +1,7 @@
 package evaluation
 
 import (
+	"encoding/json"
 	"strings"
 
 	"github.com/google/uuid"
@@ -76,12 +77,25 @@ func channelLabels(chs []store.Channel, personaName func(id string) (string, boo
 }
 
 // assembleMessageReviews builds one review per learner message (chronological as
-// given). issues is keyed by message id; missing = no issues.
+// given). Missing IDs mean unavailable review coverage.
 func assembleMessageReviews(msgs []store.Message, labels map[uuid.UUID]string, issues map[uuid.UUID][]rawIssue) []dto.MessageReview {
 	out := make([]dto.MessageReview, 0, len(msgs))
 	for _, m := range msgs {
+		status := "UNAVAILABLE"
+		if raw, ok := issues[m.ID]; ok {
+			status = "AVAILABLE"
+			if len(filterIssues(m.Content, raw)) != len(raw) {
+				status = "UNAVAILABLE"
+			}
+			for _, issue := range raw {
+				if strings.TrimSpace(issue.Corrected) == "" || strings.TrimSpace(issue.Explanation) == "" {
+					status = "UNAVAILABLE"
+				}
+			}
+		}
 		out = append(out, dto.MessageReview{
-			MessageID: m.ID.String(), ChannelLabel: labels[m.ChannelID], Content: m.Content,
+			ReviewStatus: status,
+			MessageID:    m.ID.String(), ChannelLabel: labels[m.ChannelID], Content: m.Content,
 			CreatedAt: m.CreatedAt.UTC(), Issues: filterIssues(m.Content, issues[m.ID]),
 		})
 	}
@@ -90,10 +104,30 @@ func assembleMessageReviews(msgs []store.Message, labels map[uuid.UUID]string, i
 
 // rawPointReview is the LLM's review of one talking point.
 type rawPointReview struct {
+	incomplete   bool
 	Index        *int   `json:"index"`
 	LearnerQuote string `json:"learnerQuote"`
 	Reason       string `json:"reason"`
 	Sample       string `json:"sample"`
+}
+
+// Distinguish an explicit empty quote from a missing/null response field.
+func (r *rawPointReview) UnmarshalJSON(data []byte) error {
+	type plain rawPointReview
+	if err := json.Unmarshal(data, (*plain)(r)); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	for _, name := range []string{"index", "learnerQuote", "reason", "sample"} {
+		raw, ok := fields[name]
+		if !ok || string(raw) == "null" {
+			r.incomplete = true
+		}
+	}
+	return nil
 }
 
 // assembleTaskReview builds a task review. covered comes from the DB; the quote
@@ -101,19 +135,31 @@ type rawPointReview struct {
 // raw may be nil (soft failure): fields are then empty.
 func assembleTaskReview(t store.Task, pts []store.TalkingPoint, raw []rawPointReview, learnerTexts []string) dto.TaskReview {
 	byIdx := map[int]rawPointReview{}
+	valid := true
 	for _, r := range raw {
 		if r.Index != nil {
+			if _, duplicate := byIdx[*r.Index]; duplicate {
+				valid = false
+			}
 			byIdx[*r.Index] = r
 		}
 	}
 	out := dto.TaskReview{
 		TaskID: t.ID.String(), Title: t.Title, PersonaID: t.PersonaID, Status: t.Status,
+		ReviewStatus:  "AVAILABLE",
 		TalkingPoints: make([]dto.TalkingPointReview, 0, len(pts)),
 	}
+	if !valid {
+		out.ReviewStatus = "UNAVAILABLE"
+	}
 	for i, p := range pts {
-		r := byIdx[i]
+		r, ok := byIdx[i]
+		if !ok || r.incomplete || strings.TrimSpace(r.Reason) == "" || strings.TrimSpace(r.Sample) == "" {
+			out.ReviewStatus = "UNAVAILABLE"
+		}
 		quote := strings.TrimSpace(r.LearnerQuote)
-		if !inAny(quote, learnerTexts) {
+		if quote != "" && !inAny(quote, learnerTexts) {
+			out.ReviewStatus = "UNAVAILABLE"
 			quote = ""
 		}
 		reason := strings.TrimSpace(r.Reason)

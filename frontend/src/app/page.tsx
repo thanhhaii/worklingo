@@ -193,10 +193,12 @@ export default function DashboardPage() {
                   </div>
                   <Badge variant={s.status === "COMPLETED" ? "secondary" : "outline"} className="max-sm:hidden">{s.status}</Badge>
                   <div className="flex shrink-0 items-center justify-end sm:w-56 gap-2 text-xs text-[#616061]">
-                    {ev?.status === "DONE" ? (
+                    {ev?.scoreStatus === "AVAILABLE" ? (
                       <>
                         <span className="hidden sm:inline">G {ev.grammar} · T {ev.tone} · V {ev.vocabulary}</span>
                         <ScorePill value={ev.overall} />
+                        {ev.status === "PARTIAL" && <span className="text-amber-700">Partial feedback</span>}
+                        {ev.status === "PENDING" && <span>Updating…</span>}
                       </>
                     ) : ev?.status === "PENDING" ? (
                       <span>Evaluating…</span>
