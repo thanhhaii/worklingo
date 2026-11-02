@@ -1,4 +1,4 @@
-import type { PracticeAnswer, PracticeSubmission } from "./types";
+import type { PracticeAnswer, PracticeQueue, PracticeSubmission } from "./types";
 
 export type PracticeDraft = { answers: Record<string, string>; selected: string[]; pending: PracticeSubmission | null };
 export function restoreDraft(raw: string | null): PracticeDraft {
@@ -15,4 +15,10 @@ export function restoreDraft(raw: string | null): PracticeDraft {
 export function submissionFor(answers: PracticeAnswer[], pending: PracticeSubmission | null): PracticeSubmission {
   if (pending && JSON.stringify(pending.answers) === JSON.stringify(answers)) return pending;
   return { requestId: crypto.randomUUID(), answers };
+}
+
+/** Only an explicit terminal result proves that a retained request finished. */
+export function reconcileDraft(draft: PracticeDraft, queue: PracticeQueue): PracticeDraft {
+  if (draft.pending && queue.completedBatches.some((batch) => batch.requestId === draft.pending!.requestId)) return { ...draft, pending: null };
+  return draft;
 }

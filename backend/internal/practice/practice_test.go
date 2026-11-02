@@ -74,3 +74,15 @@ func TestThreadContextExcludesUnrelatedChannelsAndThreads(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestJudgeRejectsWholeMalformedResponseAfterValidResult(t *testing.T) {
+	valid := `{"results":[{"exerciseId":"one","verdict":"ACCEPTED","feedback":"Câu viết phù hợp."}]}`
+	for _, suffix := range []string{` {"results":`, ` {"results":[]}`, ` trailing garbage`, ` }`} {
+		p := &fakeJudge{response: valid + suffix}
+		s := &Service{provider: p}
+		got := s.judge(context.Background(), []Item{{ID: "one"}}, []Answer{{"one", "An equivalent answer."}}, nil)
+		if len(got) != 1 || got[0].Verdict != "UNAVAILABLE" || p.calls != 1 {
+			t.Fatalf("accepted malformed whole response %q: %+v calls=%d", suffix, got, p.calls)
+		}
+	}
+}

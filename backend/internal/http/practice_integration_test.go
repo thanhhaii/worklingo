@@ -194,6 +194,10 @@ func TestPracticeOwnershipMaterializationValidationAndReplay(t *testing.T) {
 	if replay := req("POST", "/practice/attempts", f.owner, body); replay.Code != 200 || replay.Body.String() != w.Body.String() {
 		t.Fatal("replay changed", replay.Body.String())
 	}
+	terminal, err := svc.Queue(ctx, f.session.ID, f.session.UserID)
+	if err != nil || len(terminal.CompletedBatches) != 1 || terminal.CompletedBatches[0].RequestID != rid || terminal.CompletedBatches[0].Attempts[0].Verdict != "ACCEPTED" {
+		t.Fatal("terminal request result missing", terminal, err)
+	}
 	changed := strings.Replace(body, "I've finished the update.", "A changed answer", 1)
 	if different := req("POST", "/practice/attempts", f.owner, changed); different.Code != 409 {
 		t.Fatal("changed payload replay", different.Code)
@@ -210,7 +214,7 @@ func TestPracticeOwnershipMaterializationValidationAndReplay(t *testing.T) {
 	go func() { _, err := svc.Submit(ctx, f.session.ID, f.session.UserID, in); done <- err }()
 	<-p.entered
 	processing, err := svc.Queue(ctx, f.session.ID, f.session.UserID)
-	if err != nil || len(processing.PendingBatches) != 1 || processing.PendingBatches[0].RequestID != rid || len(processing.Items[0].Attempts) != 1 {
+	if err != nil || len(processing.CompletedBatches) != 1 || len(processing.PendingBatches) != 1 || processing.PendingBatches[0].RequestID != rid || len(processing.Items[0].Attempts) != 1 {
 		t.Fatal("running claim state", processing, err)
 	}
 	second := practice.New(f.q, p, "eval-fixture")

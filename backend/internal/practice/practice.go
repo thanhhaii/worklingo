@@ -48,6 +48,7 @@ type Item struct {
 }
 type Queue struct {
 	PendingBatches          []Submission `json:"pendingBatches"`
+	CompletedBatches        []Result     `json:"completedBatches"`
 	Items                   []Item       `json:"items"`
 	SourceReviewUnavailable bool         `json:"sourceReviewUnavailable"`
 }
@@ -130,7 +131,7 @@ func (s *Service) Queue(ctx context.Context, sessionID, userID uuid.UUID) (Queue
 	if sess.UserID != userID {
 		return Queue{}, pgx.ErrNoRows
 	}
-	out := Queue{Items: []Item{}, PendingBatches: []Submission{}, SourceReviewUnavailable: true}
+	out := Queue{Items: []Item{}, PendingBatches: []Submission{}, CompletedBatches: []Result{}, SourceReviewUnavailable: true}
 	e, err := s.q.GetEvaluation(ctx, sessionID)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return out, err
@@ -187,6 +188,7 @@ func (s *Service) Queue(ctx context.Context, sessionID, userID uuid.UUID) (Queue
 			continue
 		}
 		attempts := batchAttempts(batch)
+		out.CompletedBatches = append(out.CompletedBatches, Result{RequestID: batch.RequestID.String(), Attempts: attempts})
 		for _, a := range attempts {
 			for i := range out.Items {
 				if out.Items[i].ID == a.ExerciseID {
@@ -315,7 +317,14 @@ func (s *Service) judge(ctx context.Context, items []Item, answers []Answer, goa
 			Feedback   string `json:"feedback"`
 		} `json:"results"`
 	}
-	if s.provider == nil || llm.CompleteJSON(ctx, s.provider, llm.Request{Model: s.model, Messages: []llm.Message{{Role: llm.RoleSystem, Content: prompt}}, MaxTokens: 2000}, &out) != nil || len(out.Results) != len(answers) {
+	if s.provider == nil {
+		return unavailable(answers)
+	}
+	// Practice requires the entire response to be one valid JSON value. The shared
+	// extractor deliberately tolerates surrounding prose, which would conceal a
+	// truncated second object or trailing garbage here.
+	response, err := s.provider.Complete(ctx, llm.Request{Model: s.model, Messages: []llm.Message{{Role: llm.RoleSystem, Content: prompt}}, MaxTokens: 2000})
+	if err != nil || json.Unmarshal([]byte(response), &out) != nil || len(out.Results) != len(answers) {
 		return unavailable(answers)
 	}
 	expected := map[string]Answer{}

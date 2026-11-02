@@ -214,6 +214,6 @@ export type PracticeItem = {
   context: string[];
   attempts: PracticeAttempt[];
 };
-export type PracticeQueue = { items: PracticeItem[]; sourceReviewUnavailable: boolean; pendingBatches: PracticeSubmission[] };
+export type PracticeQueue = { items: PracticeItem[]; sourceReviewUnavailable: boolean; pendingBatches: PracticeSubmission[]; completedBatches: PracticeResult[] };
 export type PracticeSubmission = { requestId: string; answers: PracticeAnswer[] };
 export type PracticeResult = { requestId: string; attempts: PracticeAttempt[] };

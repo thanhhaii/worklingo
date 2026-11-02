@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/logo";
 import { api, errorMessage } from "@/lib/api";
 import { MOCK } from "@/lib/config";
-import { restoreDraft, submissionFor, type PracticeDraft } from "@/lib/practice";
+import { restoreDraft, submissionFor, reconcileDraft, type PracticeDraft } from "@/lib/practice";
 import type { PracticeQueue } from "@/lib/types";
 import { useRequireAuth } from "@/hooks/use-require-auth";
 
@@ -36,7 +36,10 @@ export default function PracticePage() {
         if (answers[item.id] === undefined && latest) answers[item.id] = latest.answer;
       }
       const selected = saved.selected.length ? saved.selected.filter((key) => loaded.items.some((i) => i.id === key)).slice(0, 5) : loaded.items.slice(0, 5).map((i) => i.id);
-      setDraft({ ...saved, answers, selected, pending: saved.pending ?? loaded.pendingBatches[0] ?? null }); setQueue(loaded); setError(null);
+      const reconciled = reconcileDraft({ ...saved, answers, selected, pending: saved.pending ?? loaded.pendingBatches[0] ?? null }, loaded);
+      setDraft(reconciled);
+      try { localStorage.setItem(storageKey, JSON.stringify(reconciled)); } catch { /* Retain the reconciled draft on this page. */ }
+      setQueue(loaded); setError(null);
     }).catch((e) => { if (alive) setError(errorMessage(e)); });
     return () => { alive = false; };
   }, [id, status, storageKey, user]);
@@ -53,14 +56,15 @@ export default function PracticePage() {
 
   async function refresh() {
     setBusy(true); setError(null);
-    try { setQueue(await api.practice(id)); } catch (e) { setError(errorMessage(e)); } finally { setBusy(false); }
+    try { const loaded = await api.practice(id); setQueue(loaded); updateDraft(reconcileDraft(draft, loaded)); } catch (e) { setError(errorMessage(e)); } finally { setBusy(false); }
   }
 
   async function submit(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault(); if (!valid || busy) return;
     const answers = selected.map((item) => ({ exerciseId: item.id, answer: draft.answers[item.id].trim() }));
     const submission = submissionFor(answers, draft.pending);
-    updateDraft({ ...draft, pending: submission }); setBusy(true); setError(null); setNotice(null);
+    const submittedDraft = { ...draft, pending: submission };
+    updateDraft(submittedDraft); setBusy(true); setError(null); setNotice(null);
     try {
       const result = await api.submitPractice(id, submission);
       updateDraft({ ...draft, pending: null });
@@ -71,7 +75,12 @@ export default function PracticePage() {
       setNotice(result.attempts.some((a) => a.verdict === "UNAVAILABLE") ? "Feedback is unavailable. Your answers are saved. Submit again when ready to retry." : "Feedback saved. Review your answers below.");
     } catch (e) {
       setError(`${errorMessage(e)} Your drafts are kept. Submit unchanged answers again to check the same request without starting another assessment.`);
-      try { setQueue(await api.practice(id)); } catch { /* Keep the draft and original request ID. */ }
+      try {
+        const loaded = await api.practice(id);
+        const reconciled = reconcileDraft(submittedDraft, loaded);
+        setQueue(loaded); updateDraft(reconciled);
+        if (reconciled.pending === null) { setError(null); setNotice("Saved feedback recovered. Review it below and submit a new attempt when ready."); }
+      } catch { /* Keep the draft and original request ID. */ }
     } finally { setBusy(false); }
   }
 
