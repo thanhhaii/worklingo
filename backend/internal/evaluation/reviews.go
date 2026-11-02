@@ -93,7 +93,7 @@ func (s *Service) reviewBatch(ctx context.Context, d *sessionData, batch []store
 	cctx, cancel := context.WithTimeout(ctx, 150*time.Second)
 	defer cancel()
 	temp := 0.1
-	if err := llm.CompleteJSON(cctx, s.llm, llm.Request{Model: s.model, MaxTokens: 8000, Temperature: &temp,
+	if err := s.completeJSON(cctx, llm.Request{Model: s.model, MaxTokens: 8000, Temperature: &temp,
 		Messages: []llm.Message{{Role: llm.RoleUser, Content: fmt.Sprintf(messageReviewPrompt, strings.TrimSpace(sb.String())) + "\n" + d.goalContext}}}, &out); err != nil {
 		return nil, err
 	}
@@ -199,7 +199,7 @@ func (s *Service) reviewTasks(ctx context.Context, d *sessionData, skipLLM bool)
 		}
 		cctx, cancel := context.WithTimeout(ctx, 150*time.Second)
 		temp := 0.3
-		err := llm.CompleteJSON(cctx, s.llm, llm.Request{Model: s.model, MaxTokens: 6000, Temperature: &temp,
+		err := s.completeJSON(cctx, llm.Request{Model: s.model, MaxTokens: 6000, Temperature: &temp,
 			Messages: []llm.Message{{Role: llm.RoleUser, Content: fmt.Sprintf(taskReviewPrompt, strings.TrimSpace(sb.String())) + "\n" + d.goalContext}}}, &out)
 		cancel()
 		if err != nil {

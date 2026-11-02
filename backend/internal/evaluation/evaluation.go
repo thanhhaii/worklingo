@@ -268,7 +268,7 @@ func (s *Service) score(ctx context.Context, d *sessionData) (result, error) {
 	prompt := fmt.Sprintf("Ghosting warnings (requests left unanswered too long): %d\n\nSession transcript:\n%s", d.warnings, d.transcript)
 	var out result
 	temp := 0.2
-	err := llm.CompleteJSON(ctx, s.llm, llm.Request{
+	err := s.completeJSON(ctx, llm.Request{
 		Model: s.model, MaxTokens: 3000, Temperature: &temp,
 		Messages: []llm.Message{{Role: llm.RoleSystem, Content: systemPrompt + "\n" + d.goalContext}, {Role: llm.RoleUser, Content: prompt + "\n" + d.goalContext}},
 	}, &out)
